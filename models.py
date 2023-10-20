@@ -29,10 +29,12 @@ class Siamese(Module):
 class SiameseLoss():
     '''
     args:
+        margin: distance threshold for different classes
         alpha: l2 regularization coefficient applied to embeddings
     '''
-    def __init__(self, alpha=1e-3) -> None:
+    def __init__(self, margin = 1/2, alpha=1e-2) -> None:
         self.alpha = alpha
+        self.margin = margin
 
     def forward(self, e1: Tensor, e2: Tensor, y1, y2):
         """
@@ -41,10 +43,13 @@ class SiameseLoss():
             e1, e2 (Tensors): embeddings
             y1, y2 (any) : labels    
         """
+        diff = int(y1 == y2)
         loss = 0
         loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))
-        raise NotImplementedError
-
+        d = torch.norm((e1-e2), p=2, dim=-1)
+        loss = loss + diff*d**2, +(1-diff)*torch.maximum(self.margin - d, 0)**2
+        return loss
+    
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), output_shape:int=20, act = nn.GELU()) -> None:
         super().__init__()
