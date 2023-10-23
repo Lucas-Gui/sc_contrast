@@ -53,6 +53,9 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     train = data[~data['variant'].isin(test_vars)]
     test_seen = train.sample(frac=x_cell, replace=False)
     train = train.loc[train.index.difference(test_seen.index)]
+    print(f"Train length: {len(train)}")
+    print(f"Seen test length  : {len(test_seen)}")
+    print(f"Unseen test length: {len(test_unseen)}")
 
     return train, test_seen, test_unseen
 

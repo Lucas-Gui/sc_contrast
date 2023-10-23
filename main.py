@@ -41,37 +41,38 @@ def train_model(train, test_seen, test_unseen, model,
     writer = SummaryWriter(join('runs',run_name))
     for i in bar:
         loss_train = train_loop(train, model, loss_fn, optimizer, device)
+        writer.add_scalar('train/loss',np.mean(loss_train), i)
         loss_seen, acc_seen = test_loop(test_seen, model, loss_fn, device, margin=margin)
         loss_unseen, acc_unseen = test_loop(test_unseen, model, loss_fn, device, margin=margin)
-        writer.add_scalar('train/loss',np.mean(loss_train), i)
         writer.add_scalar('test/loss_unseen',np.mean(loss_unseen), i)
         writer.add_scalar('test/loss_seen',np.mean(loss_seen), i)
         writer.add_scalar('test/acc_unseen',np.mean(acc_unseen), i)
         writer.add_scalar('test/acc_seen',np.mean(acc_seen), i)
+        torch.save(model, join('models', run_name +  '.model.pkl'))
     writer.flush()
 
 
 
-def train_loop(train:DataLoader, model:nn.Module, loss_fn, optimizer:torch.optim.Optimizer, device)-> Tensor:
+def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer, device)-> Tensor:
     model.train()
     loss_l = []
-    for x,y in tqdm(train, position=1, desc='Training loop'):
+    for x,y in tqdm(train, position=1, desc='Training loop', leave=False):
         x = (x_i.to(device) for x_i in x)
         y = y.to(device)
         embeddings = model.forward(*x)
-        loss:Tensor = loss_fn(*embeddings, y)
+        loss:Tensor = loss_fn.forward(*embeddings, y)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
-        loss_l.append(loss.detach().cpu().item())
-    return loss_l
+        loss_l.append(loss)
+    return [t.detach().cpu().item() for t in loss_l]
 
 def test_loop(test:DataLoader, model:nn.Module, loss_fn, device, margin) -> Tuple[Tensor]:
     model.eval()
     loss_l = []
     acc_l = []
     with torch.no_grad():
-        for x,y in tqdm(test, position=1, desc='test loop'):
+        for x,y in tqdm(test, position=1, desc='Testing loop', leave=False):
             x = (x_i.to(device) for x_i in x)
             y = y.to(device)
             embeddings = model.forward(*x)

@@ -7,8 +7,8 @@ from typing import *
 class _DfDataset(Dataset):
     def __init__(self, df:pd.DataFrame) -> None:
         super().__init__()
-        self.y = df['variant']
-        self.x = df.drop(columns=['variant','Variant functional class'])
+        self.y = df['variant'].reset_index()
+        self.x = torch.tensor(df.drop(columns=['variant','Variant functional class']).to_numpy(), dtype=torch.float32)
     
     def __len__(self):
         return len(self.y)
@@ -19,20 +19,21 @@ class _DfDataset(Dataset):
 class SiameseDataset(_DfDataset):
     
     def __getitem__(self, index) -> Any:
-        x1 = torch.tensor(self.x.iloc[index].to_numpy(), dtype=torch.float32)
+        x1 = self.x[index]
         y1 = self.y.iloc[index]
         if torch.rand((1,)).item() > 0.5: # randomly get same class or different class
             # same class case
-            x2 = self.x[self.y == y1].sample(1)
-            y2 = y1
+            i = self.y[self.y == y1].sample(1).index.item()
+            y = True
         else:
-            x2 = self.x[self.y != y1].sample(1)
-            y2 = self.y.loc[x2.index].item()
-        x2 = torch.tensor(x2.to_numpy(), dtype=torch.float32)
-        y = torch.tensor(y1==y2)
+            i = self.y[self.y != y1].sample(1).index.item()
+            y = False
+
+        x2 = self.x[i]
+        y = torch.tensor(y)
         return (x1,x2), y
 
-def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 4):
+def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8):
     dls = []
     for df in dfs:
         ds = dataset_class(df)
