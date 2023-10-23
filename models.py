@@ -1,5 +1,6 @@
 """Siamese, triplet and other contrastive network models"""
 
+from typing import Any
 import torch
 from torch import Tensor
 from torch.nn import Module
@@ -26,29 +27,45 @@ class Siamese(Module):
         e2 = self.network(x2)
         return e1, e2
 
-class SiameseLoss():
+class ContrastiveLoss():
+    alpha:float
+    margin:float
+    def forward(self, embeddings, y) -> Tensor:
+        raise NotImplementedError
+    
+    def __call__(self, *args: Any, **kwds: Any) -> Tensor:
+        return self.forward(*args, **kwds)
+
+
+class SiameseLoss(ContrastiveLoss):
     '''
     args:
         margin: distance threshold for different classes
         alpha: l2 regularization coefficient applied to embeddings
     '''
-    def __init__(self, margin = 1/2, alpha=1e-2) -> None:
+    def __init__(self, margin, alpha) -> None:
         self.alpha = alpha
         self.margin = margin
 
-    def forward(self, e1: Tensor, e2: Tensor, y1, y2):
+    def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
         """
         Compute the siamese loss.
         args:
             e1, e2 (Tensors): embeddings
             y1, y2 (any) : labels    
         """
-        diff = int(y1 == y2)
         loss = 0
         loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))
         d = torch.norm((e1-e2), p=2, dim=-1)
-        loss = loss + diff*d**2, +(1-diff)*torch.maximum(self.margin - d, 0)**2
-        return loss
+        loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
+        return loss.mean()
+    
+
+def accuracy(e1: Tensor, e2: Tensor, y, margin):
+    d = (e1 - e2).norm(p=2)
+    return torch.logical_xor(y, d>margin).float().mean()
+
+
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), output_shape:int=20, act = nn.GELU()) -> None:
