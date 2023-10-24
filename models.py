@@ -55,7 +55,7 @@ class SiameseLoss(ContrastiveLoss):
             y1, y2 (any) : labels    
         """
         loss = 0
-        loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))
+        # loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
         d = torch.norm((e1-e2), p=2, dim=-1)
         loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
         return loss.mean()
@@ -68,7 +68,8 @@ def accuracy(e1: Tensor, e2: Tensor, y, margin):
 
     
 class MLP(Module):
-    def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), output_shape:int=20, act = nn.GELU()) -> None:
+    def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
+                 output_shape:int=20, act = nn.ELU()) -> None:
         super().__init__()
         shape = [input_shape, *inner_shape, ]
         modules = []

@@ -36,6 +36,9 @@ class SiameseDataset(_DfDataset):
 def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8):
     dls = []
     for df in dfs:
+        if len(df) ==0:
+            dls.append(None)
+            continue
         ds = dataset_class(df)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls

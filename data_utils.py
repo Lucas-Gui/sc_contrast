@@ -39,6 +39,8 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path)-> pd.DataF
 
     #impute variant/impact class to cell and drop cells with missing values
     counts = counts.merge(v2c, how='left', left_index=True, right_on='cell').dropna(axis=0).set_index('cell')
+    counts.loc[counts['Variant functional class'] == 'WT-like', 'variant']= 'WT-like'
+    # counts = counts[counts['variant'].isin(['R175H','T170T'])] # !!!!!! #TODO
     return counts
 
 def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sample ?
@@ -58,6 +60,8 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     print(f"Unseen test length: {len(test_unseen)}")
 
     return train, test_seen, test_unseen
+
+
 
 
     
