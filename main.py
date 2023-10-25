@@ -15,11 +15,12 @@ from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import json
 
-
+# config 
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
     'standard':SiameseLoss
 }
+
 
 def make_dir_if_needed(path):
     if not os.path.exists(path):
@@ -42,7 +43,7 @@ def get_paths(data_dir:str):
         paths.extend(l)
     return paths
 
-def load_split(index_dir, counts):
+def load_split(index_dir, counts) -> List[pd.DataFrame]:
         i = 0
         dataframes = []
         while os.path.isfile(join(index_dir, f'index_{i}.csv')):
@@ -60,12 +61,12 @@ def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_ta
 
 
         
-def train_model(train, test_seen, test_unseen, model, model_args:Dict,
-                 loss_fn, device, margin, n_epoch=10_000, run_name='run',
-                 lr=1e-3
+def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
+                 loss_fn, device, margin, n_epoch=10_000, 
+                 lr=1e-3, weight_decay=0.001
                  ):
-    i_0 = model_args['restart']
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    i_0 = run_meta['i']
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
     for i in bar:
@@ -77,10 +78,11 @@ def train_model(train, test_seen, test_unseen, model, model_args:Dict,
         if test_unseen is not None:
             metrics_unseen = test_loop(test_unseen, model, loss_fn, device, margin=margin)
             write_metrics(metrics_unseen, writer, 'test/unseen',i)
-        torch.save(model, join('models', run_name +  '.model.pkl'))
-        model_args['restart'] = i
-        with open(join('models',run_name+'.meta.json'), 'w') as file:
-            json.dump(model_args, file, sort_keys=True, indent=2)
+        #saving and writing
+        torch.save(model, model_file)
+        run_meta['i'] = i
+        with open(meta_file, 'w') as file:
+            json.dump(run_meta, file, sort_keys=True, indent=2)
     writer.flush()
 
 
@@ -137,16 +139,16 @@ def main(args):
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths)
-    index_dir = join('models', args.run_name+'split')
-    model_file = join('models',args.run_name+'.model.pkl')
+    counts = load_data(*paths, group_wt_like=~args.split_wt_like)
+    index_dir = join(run_dir, 'split')
+    model_file = join(run_dir,'model.pkl')
+    meta_file = join(run_dir, 'meta.json')
     if args.restart : #load model and split
         dataframes = load_split(index_dir, counts)
         print(f'Loading model from {model_file}')
         model = torch.load(model_file)
-        with open(join('models', args.run_name+'.meta.json'), 'r') as reader:
-            model_args = json.load(reader)
-
+        with open(meta_file, 'r') as file:
+            run_meta = json.load(file) # data that we want to keep between restarts
     else:
         dataframes = split(counts) #random split
         # save split
@@ -156,8 +158,8 @@ def main(args):
             df.to_csv(join(index_dir,f'index_{i}.csv'))
         in_shape = dataframes[0].shape[1]-2
         model = Siamese(MLP(input_shape=in_shape)).to(device)
-        model_args = {
-            'restart':0,
+        run_meta = {
+            'i':0,
         }
     
     train, test_seen, test_unseen = make_loaders(*dataframes, batch_size=args.batch_size,  )
@@ -165,21 +167,40 @@ def main(args):
 
     print(model)
     loss_fn = loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
-    train_model(train, test_seen, test_unseen, model, model_args, loss_fn, device, 
-                margin=args.margin, run_name=args.run_name, lr=args.lr)
+    train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
+                loss_fn, device, 
+                margin=args.margin, lr=args.lr, n_epoch=args.n_epochs,
+                weight_decay=args.weight_decay
+                )
 
 
 if __name__ == '__main__':
     parser = ArgumentParser('''Train and evaluate a contrastive model on Ursu et al. data''')
     parser.add_argument('data_path', help='Path to data directory. Should contain')
+    parser.add_argument('run_name',)
+
+    parser.add_argument('--restart', action='store_true')
+
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
     parser.add_argument('-m','--margin',default=1, type=float, help='Contrastive loss margin parameter')
     parser.add_argument('-a','--alpha',default=1e-2, type=float, help='L2 embedding regularization')
+    parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
-    parser.add_argument('--restart', action='store_true')
     parser.add_argument('--lr',type=float, default=1e-3, )
-    parser.add_argument('run_name',)
+    parser.add_argument('-n','--n-epochs', metavar='N', default=1_000, help='Number of epochs to run')
+    parser.add_argument('--split-wt-like',action='store_true', 
+                        help='If not passed, group all WT-like variants in the same class')
+    
+    parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
+
     args = parser.parse_args()
+
+    run_dir = join('models',args.run_name) # GLOBAL VARIABLE
+    run_name = args.run_name #GLOBAL VARIABLE #might not be justified
+    make_dir_if_needed(run_dir)
+    # save args to file
+    parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
+    print()
     main(args)
     

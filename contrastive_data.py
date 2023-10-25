@@ -7,8 +7,10 @@ from typing import *
 class _DfDataset(Dataset):
     def __init__(self, df:pd.DataFrame) -> None:
         super().__init__()
-        self.y = df['variant'].reset_index()
-        self.x = torch.tensor(df.drop(columns=['variant','Variant functional class']).to_numpy(), dtype=torch.float32)
+        self.y = df['variant'].reset_index(drop=True)
+        self.x = torch.tensor(
+                df.drop(columns=['variant','Variant functional class']).to_numpy(), 
+            dtype=torch.float32)
     
     def __len__(self):
         return len(self.y)
@@ -31,7 +33,7 @@ class SiameseDataset(_DfDataset):
 
         x2 = self.x[i]
         y = torch.tensor(y)
-        return (x1,x2), y
+        return (x1,x2), y #,i
 
 def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8):
     dls = []

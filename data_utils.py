@@ -5,7 +5,8 @@ import numpy as np
 GENE = 'TP53'
 
 
-def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path)-> pd.DataFrame:
+def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
+              group_wt_like=False)-> pd.DataFrame:
     '''
     *_path : paths to gzipped mtx or csv files
     except variant_path, which refers to an unzipped csv file
@@ -39,8 +40,12 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path)-> pd.DataF
 
     #impute variant/impact class to cell and drop cells with missing values
     counts = counts.merge(v2c, how='left', left_index=True, right_on='cell').dropna(axis=0).set_index('cell')
-    counts.loc[counts['Variant functional class'] == 'WT-like', 'variant']= 'WT-like'
-    # counts = counts[counts['variant'].isin(['R175H','T170T'])] # !!!!!! #TODO
+    if group_wt_like:
+        print('\t\tGrouping WT-like variants.')
+        counts.loc[counts['Variant functional class'] == 'WT-like', 'variant']= 'WT-like'
+    # counts = counts[counts['variant'].isin(['G13V','T20T'])] # !!!!!! #TODO
+    print(f"\t\t{len(counts['variant'].unique())} variant classes")
+    print(counts['variant'].unique())
     return counts
 
 def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sample ?

@@ -55,7 +55,7 @@ class SiameseLoss(ContrastiveLoss):
             y1, y2 (any) : labels    
         """
         loss = 0
-        # loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
+        loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
         d = torch.norm((e1-e2), p=2, dim=-1)
         loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
         return loss.mean()
