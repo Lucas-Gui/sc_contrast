@@ -7,25 +7,7 @@ from torch.nn import Module
 import torch.nn as nn
 from typing import *
 
-
-class Siamese(Module):
-    '''
-    A siamese network.
-    args :
-        network : inner module of the network. Must be correctly initialised. 
-    '''
-    def __init__(self, network) -> None:
-        super().__init__()
-        self.network = network
-
-    def forward(self, x1: Tensor, x2:Tensor, ):
-        """
-        args:
-            x1, x2 : Input tensors
-        """
-        e1 = self.network(x1)
-        e2 = self.network(x2)
-        return e1, e2
+# Loss
 
 class ContrastiveLoss():
     alpha:float
@@ -60,12 +42,44 @@ class SiameseLoss(ContrastiveLoss):
         loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
         return loss.mean()
     
-
+# metrics
 def accuracy(e1: Tensor, e2: Tensor, y, margin):
     d = (e1 - e2).norm(p=2)
     return torch.logical_xor(y, d>margin).float().mean()
 
+def ROC_score(y:Tensor, d:Tensor, eps = 1e-2):
+    '''
+    args:
+        d (Tensor): example pair distances
+        y (Tensor): example pair labels (1 if example belongs to the same class)
+    '''
+    d = (d - d.min())/(d.max() - d.min())
+    s = y.mean(dtype=torch.float32)
+    t = torch.arange(0,1,eps).reshape((-1,1)) #classification thresholds (T, 1) -> will broadcast to (T, N) with d and y
+    tpr = ((d<t)*y).mean(dim=1, dtype=torch.float32)/s # (d<t) : predicted true; y : actual true; s : sum of actual true
+    fpr = ((d<t)* (~y)).mean(dim=1, dtype=torch.float32)/(1-s) # (d<t) : predicted true; y : actual false; 1-s : sum of actual true
+    # integration by sum of trapezes
+    roc = 1/2 * ((fpr[1:] - fpr[:-1])*(tpr[1:] + tpr[:-1])).sum() 
+    return roc, tpr, fpr
 
+class Siamese(Module):
+    '''
+    A siamese network.
+    args :
+        network : inner module of the network. Must be correctly initialised. 
+    '''
+    def __init__(self, network) -> None:
+        super().__init__()
+        self.network = network
+
+    def forward(self, x1: Tensor, x2:Tensor, ):
+        """
+        args:
+            x1, x2 : Input tensors
+        """
+        e1 = self.network(x1)
+        e2 = self.network(x2)
+        return e1, e2
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 

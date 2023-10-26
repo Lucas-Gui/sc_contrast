@@ -43,9 +43,8 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     if group_wt_like:
         print('\t\tGrouping WT-like variants.')
         counts.loc[counts['Variant functional class'] == 'WT-like', 'variant']= 'WT-like'
-    # counts = counts[counts['variant'].isin(['G13V','T20T'])] # !!!!!! #TODO
+    # counts = counts[counts['variant'].isin(['G13V','T20T'])] # !!!!!! 
     print(f"\t\t{len(counts['variant'].unique())} variant classes")
-    print(counts['variant'].unique())
     return counts
 
 def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sample ?

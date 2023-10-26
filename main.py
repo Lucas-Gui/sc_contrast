@@ -14,6 +14,7 @@ import pandas as pd
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import json
+import sys
 
 # config 
 
@@ -55,9 +56,9 @@ def load_split(index_dir, counts) -> List[pd.DataFrame]:
 def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_tag:str, i):
     for tag, metric_or_dict in metrics.items():
         if isinstance(metric_or_dict, dict):
-            writer.add_scalars(f'{main_tag}_{tag}', metric_or_dict, i)
+            writer.add_scalars(f'{main_tag}/{tag}', metric_or_dict, i)
         else:
-            writer.add_scalar(f'{main_tag}_{tag}', metric_or_dict, i)
+            writer.add_scalar(f'{main_tag}/{tag}', metric_or_dict, i)
 
 
         
@@ -67,12 +68,13 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
                  ):
     i_0 = run_meta['i']
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    print(optimizer)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
     for i in bar:
         bar.set_postfix({'i':i})
-        loss_train = train_loop(train, model, loss_fn, optimizer, device)
-        writer.add_scalar('train/loss',np.mean(loss_train), i)
+        metrics_train = train_loop(train, model, loss_fn, optimizer, device)
+        write_metrics(metrics_train, writer, 'train', i)
         metrics_seen =  test_loop(test_seen, model, loss_fn, device, margin=margin)
         write_metrics(metrics_seen, writer, 'test/seen',i)
         if test_unseen is not None:
@@ -90,6 +92,9 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer, device)-> Tensor:
     model.train()
     loss_l = []
+    y_l = []
+    d_l = []
+    norm_l = []
     for x,y in tqdm(train, position=1, desc='Training loop', leave=False):
         x = (x_i.to(device) for x_i in x)
         y = y.to(device)
@@ -99,12 +104,27 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         loss_l.append(loss)
-    return [t.detach().cpu().item() for t in loss_l]
+        y_l.append(y)
+        e1, e2 = embeddings
+        d_l.append(torch.norm(e1-e2, p=2, dim=-1)) #TODO : change to accomodate triplet loss
+        norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
+    d = torch.concat(d_l).detach().cpu()
+    y = torch.concat(y_l).detach().cpu()
+    norm = torch.concat(norm_l).detach().cpu()
+    metrics = {
+        'dist':{
+            'pos' : ((d*y).sum()/y.sum()).item(),
+            'neg' : ((d* ~y).sum()/(~y).sum()).item()
+            },
+        'l2_penalty':norm.mean().item(),
+        'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
+        'roc': ROC_score(y, d)[0]
+    }
+    return metrics
 
 def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, device, margin, ) -> Dict[str, float|Dict]:
     model.eval()
     loss_l = []
-    acc_l = []
     y_l = []
     d_l = []
     norm_l = []
@@ -115,24 +135,23 @@ def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, device,
             embeddings = model.forward(*x)
             loss:Tensor = loss_fn(*embeddings, y)
             loss_l.append(loss)
-            acc_l.append(accuracy(*embeddings, y, margin))
             y_l.append(y)
             e1, e2 = embeddings
             d_l.append(torch.norm(e1-e2, p=2, dim=-1)) #TODO : change to accomodate triplet loss
             norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
-    d = torch.concat(d_l)
-    y = torch.concat(y_l)
-    norm = torch.concat(norm_l)
+    d = torch.concat(d_l).cpu()
+    y = torch.concat(y_l).cpu()
+    norm = torch.concat(norm_l).cpu()
     metrics = {
-        'dist':{
-            'pos' : ((d*y).sum()/y.sum()).item(),
-            'neg' : ((d* ~y).sum()/(~y).sum()).item()
-            },
+        'dist_pos' : ((d*y).sum()/y.sum()).item(),
+        'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
         'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'acc' : np.mean([t.detach().cpu().item() for t in acc_l]),
+        'roc': ROC_score(y, d)[0]
     }
     return metrics
+
+
 
 def main(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -157,12 +176,12 @@ def main(args):
             df = pd.DataFrame(index=df.index).reset_index()
             df.to_csv(join(index_dir,f'index_{i}.csv'))
         in_shape = dataframes[0].shape[1]-2
-        model = Siamese(MLP(input_shape=in_shape)).to(device)
+        model = Siamese(MLP(input_shape=in_shape, inner_shape=arg.shape, output_shape=args.embed_dim)).to(device)
         run_meta = {
             'i':0,
         }
     
-    train, test_seen, test_unseen = make_loaders(*dataframes, batch_size=args.batch_size,  )
+    train, test_seen, test_unseen = make_loaders(*dataframes, batch_size=args.batch_size, n_workers=args.n_workers )
     in_shape = next(iter(train))[0][0].shape[1]
 
     print(model)
@@ -188,16 +207,32 @@ if __name__ == '__main__':
     parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
     parser.add_argument('--lr',type=float, default=1e-3, )
-    parser.add_argument('-n','--n-epochs', metavar='N', default=1_000, help='Number of epochs to run')
-    parser.add_argument('--split-wt-like',action='store_true', 
+    parser.add_argument('-n','--n-epochs', metavar='N', default=10_000, type=int, help='Number of epochs to run')
+    parser.add_argument('--split-wt-like',action='store_true', default=False,
                         help='If not passed, group all WT-like variants in the same class')
     
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
-
+    parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
+    parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension')
+    parser.add_argument('--n-workers', default=4, type=int, help='Number of workers for datalaoding')
+    parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
     args = parser.parse_args()
 
     run_dir = join('models',args.run_name) # GLOBAL VARIABLE
     run_name = args.run_name #GLOBAL VARIABLE #might not be justified
+    # argument compatibility check
+    if args.restart:
+        sources = parser._source_to_settings
+        for arg in ['shape','embed_dim']:
+            if sources['command_line'].get(arg) is not None:
+                print(f'Warning : restart : {arg} will be ignored')
+    # safety overwriting check
+    if os.path.exists(join(run_dir, 'model.pkl')) and not args.restart and not args.overwrite:
+        check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n]')
+        if check.lower() in ['n','no']:
+            sys.exit()
+        else:
+            print('Proceeding.')
     make_dir_if_needed(run_dir)
     # save args to file
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
