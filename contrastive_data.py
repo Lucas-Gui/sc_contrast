@@ -19,12 +19,19 @@ class _DfDataset(Dataset):
     #     raise NotImplementedError
     
 class SiameseDataset(_DfDataset):
+
+    def __init__(self, df: pd.DataFrame, p=0.5) -> None:
+        '''
+        p : probability to choose a positive pair at each pair sampling
+        '''
+        super().__init__(df)
+        self.p = 0.5
     
     def __getitem__(self, index) -> Any:
         x1 = self.x[index]
         y1 = self.y.iloc[index]
-        if torch.rand((1,)).item() > 0.5: # randomly get same class or different class
-            # same class case
+        if torch.rand((1,)).item() < self.p: # randomly get same class or different class
+            # same class case : positive pair
             i = self.y[self.y == y1].sample(1).index.item()
             y = True
         else:
@@ -35,12 +42,12 @@ class SiameseDataset(_DfDataset):
         y = torch.tensor(y)
         return (x1,x2), y #,i
 
-def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8):
+def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8, pos_frac=0.5):
     dls = []
     for df in dfs:
         if len(df) ==0:
             dls.append(None)
             continue
-        ds = dataset_class(df)
+        ds = dataset_class(df, p=pos_frac)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls

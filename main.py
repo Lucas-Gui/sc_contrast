@@ -71,15 +71,22 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
     print(optimizer)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
+    best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
         metrics_train = train_loop(train, model, loss_fn, optimizer, device)
         write_metrics(metrics_train, writer, 'train', i)
         metrics_seen =  test_loop(test_seen, model, loss_fn, device, margin=margin)
-        write_metrics(metrics_seen, writer, 'test/seen',i)
+        write_metrics(metrics_seen, writer, 'test_seen',i)
+        if metrics_seen['roc'] > best_score:
+            best_score = metrics_seen['roc']
+            torch.save(model, join(run_dir, 'best_model.pkl'))
+            with open(join(run_dir, 'best_score.json'), 'w') as file:
+                json.dump({'i':i, 'roc_seen':best_score}, file, sort_keys=True, indent=2)
+
         if test_unseen is not None:
             metrics_unseen = test_loop(test_unseen, model, loss_fn, device, margin=margin)
-            write_metrics(metrics_unseen, writer, 'test/unseen',i)
+            write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, model_file)
         run_meta['i'] = i
@@ -112,10 +119,8 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
     y = torch.concat(y_l).detach().cpu()
     norm = torch.concat(norm_l).detach().cpu()
     metrics = {
-        'dist':{
-            'pos' : ((d*y).sum()/y.sum()).item(),
-            'neg' : ((d* ~y).sum()/(~y).sum()).item()
-            },
+        'dist_pos' : ((d*y).sum()/y.sum()).item(),
+        'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
         'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
         'roc': ROC_score(y, d)[0]
@@ -158,7 +163,7 @@ def main(args):
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like=~args.split_wt_like)
+    counts = load_data(*paths, group_wt_like=~args.split_wt_like,)
     index_dir = join(run_dir, 'split')
     model_file = join(run_dir,'model.pkl')
     meta_file = join(run_dir, 'meta.json')
@@ -176,12 +181,17 @@ def main(args):
             df = pd.DataFrame(index=df.index).reset_index()
             df.to_csv(join(index_dir,f'index_{i}.csv'))
         in_shape = dataframes[0].shape[1]-2
-        model = Siamese(MLP(input_shape=in_shape, inner_shape=arg.shape, output_shape=args.embed_dim)).to(device)
+        model = Siamese(
+            MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
+                output_shape=args.embed_dim)
+                            ).to(device)
         run_meta = {
             'i':0,
         }
     
-    train, test_seen, test_unseen = make_loaders(*dataframes, batch_size=args.batch_size, n_workers=args.n_workers )
+    train, test_seen, test_unseen = make_loaders(
+        *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
+        pos_frac = args.positive_fraction )
     in_shape = next(iter(train))[0][0].shape[1]
 
     print(model)
@@ -204,8 +214,10 @@ if __name__ == '__main__':
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
     parser.add_argument('-m','--margin',default=1, type=float, help='Contrastive loss margin parameter')
     parser.add_argument('-a','--alpha',default=1e-2, type=float, help='L2 embedding regularization')
+    parser.add_argument('-d','--dropout',default=0.2, type=float, help='Dropout frequency')
     parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
+    parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--lr',type=float, default=1e-3, )
     parser.add_argument('-n','--n-epochs', metavar='N', default=10_000, type=int, help='Number of epochs to run')
     parser.add_argument('--split-wt-like',action='store_true', default=False,
@@ -227,15 +239,17 @@ if __name__ == '__main__':
             if sources['command_line'].get(arg) is not None:
                 print(f'Warning : restart : {arg} will be ignored')
     # safety overwriting check
-    if os.path.exists(join(run_dir, 'model.pkl')) and not args.restart and not args.overwrite:
-        check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n]')
+    if os.path.exists(join(run_dir, 'config.ini')) and not args.restart and not args.overwrite:
+        check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n] ')
         if check.lower() in ['n','no']:
+            print('Exiting.')
             sys.exit()
         else:
             print('Proceeding.')
     make_dir_if_needed(run_dir)
     # save args to file
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
+    # print(parser._source_to_settings)
     print()
     main(args)
     

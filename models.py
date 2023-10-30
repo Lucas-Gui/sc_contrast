@@ -83,13 +83,15 @@ class Siamese(Module):
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
-                 output_shape:int=20, act = nn.ELU()) -> None:
+                 output_shape:int=20, act = nn.ELU(), dropout = None) -> None:
         super().__init__()
         shape = [input_shape, *inner_shape, ]
         modules = []
         for i in range(len(shape)-1):
             modules.append(nn.Linear(shape[i], shape[i+1]))
             modules.append(act)
+            if dropout :
+                modules.append(nn.Dropout(p = dropout))
         modules.append(nn.Linear(inner_shape[-1], output_shape))
         self.layers = nn.Sequential(*modules)
 
