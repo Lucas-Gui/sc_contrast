@@ -58,7 +58,8 @@ def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_ta
         if isinstance(metric_or_dict, dict):
             writer.add_scalars(f'{main_tag}/{tag}', metric_or_dict, i)
         else:
-            writer.add_scalar(f'{main_tag}/{tag}', metric_or_dict, i)
+            if not tag.startswith('_'):
+                writer.add_scalar(f'{main_tag}/{tag}', metric_or_dict, i)
 
 
         
@@ -79,7 +80,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         metrics_seen =  test_loop(test_seen, model, loss_fn, device, margin=margin)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen['roc'] > best_score:
-            best_score = metrics_seen['roc']
+            best_score = metrics_seen['roc'].item()
             torch.save(model, join(run_dir, 'best_model.pkl'))
             with open(join(run_dir, 'best_score.json'), 'w') as file:
                 json.dump({'i':i, 'roc_seen':best_score}, file, sort_keys=True, indent=2)
@@ -123,7 +124,7 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
         'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'roc': ROC_score(y, d)[0]
+        'roc': ROC_score(y, d)[0].item()
     }
     return metrics
 
@@ -152,7 +153,9 @@ def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, device,
         'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
         'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'roc': ROC_score(y, d)[0]
+        'roc': ROC_score(y, d)[0].item(),
+        '_n_pos' : y.sum().item(),
+        '_n_neg' : (~y).sum().item(),
     }
     return metrics
 
@@ -163,7 +166,7 @@ def main(args):
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like=~args.split_wt_like,)
+    counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
     index_dir = join(run_dir, 'split')
     model_file = join(run_dir,'model.pkl')
     meta_file = join(run_dir, 'meta.json')

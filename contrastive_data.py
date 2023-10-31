@@ -25,7 +25,7 @@ class SiameseDataset(_DfDataset):
         p : probability to choose a positive pair at each pair sampling
         '''
         super().__init__(df)
-        self.p = 0.5
+        self.p = p
     
     def __getitem__(self, index) -> Any:
         x1 = self.x[index]
@@ -41,13 +41,53 @@ class SiameseDataset(_DfDataset):
         x2 = self.x[i]
         y = torch.tensor(y)
         return (x1,x2), y #,i
+    
+
+class BipartiteDataset(Dataset):
+    '''
+    A dataset that takes two dataframes as data.
+    Iterates over df1, and samples a second random example, either from df1, in the same class as x1 (with probability p1) or df2
+    '''
+    # Positive examples are still same-label pairs and NOT pairs with both examples from df1.
+    def __init__(self, df1:pd.DataFrame, df2:pd.DataFrame, p1=0.5) -> None:
+        super().__init__()
+        self.y1 = df1['variant'].reset_index(drop=True)
+        self.x1 = torch.tensor(
+                df1.drop(columns=['variant','Variant functional class']).to_numpy(), 
+            dtype=torch.float32)
+        self.y2 = df2['variant'].reset_index(drop=True)
+        self.x2 = torch.tensor(
+                df2.drop(columns=['variant','Variant functional class']).to_numpy(), 
+            dtype=torch.float32)
+        self.p1 = p1
+    
+    def __len__(self):
+        return len(self.y1)
+    
+    def __getitem__(self, index) -> Any:
+        x1 = self.x1[index]
+        y1 = self.y1.iloc[index]
+        if torch.rand((1,)).item() < self.p1: # randomly get same class or different class
+            # same class case : positive pair
+            y2 = self.y1[self.y1 == y1].sample(1)
+            x2 = self.x1[y2.index.item()]
+        else:
+            y2 = self.y2.sample(1)
+            x2 = self.x2[y2.index.item()]
+
+        y = torch.tensor(y1==y2.item())
+        return (x1,x2), y #,i
 
 def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8, pos_frac=0.5):
+    '''
+    pos_frac : fraction of positive pairs in training set (first dataloader.).
+    Other dataloaders will have a 50% fraction of positive pairs.
+    '''
     dls = []
-    for df in dfs:
+    for i, df in enumerate(dfs):
         if len(df) ==0:
             dls.append(None)
             continue
-        ds = dataset_class(df, p=pos_frac)
+        ds = dataset_class(df, p=pos_frac if i==0 else 0.5)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls
