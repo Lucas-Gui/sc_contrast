@@ -2,7 +2,6 @@ import gzip
 import pandas as pd
 import numpy as np
 
-GENE = 'TP53'
 
 
 def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
@@ -12,26 +11,29 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     except variant_path, which refers to an unzipped csv file
     '''
     print('\tReading files...', flush=True)
+    print('\t\tReading matrix', flush=True)
     with gzip.open(mtx_path) as file: #read counts
         counts = pd.read_csv(file, skiprows=3,header=None, sep=' ')
     counts.columns = ['cell','gene','reads']
     counts[['cell','gene']] -= 1 #file is imported from 1-indexed array format
+    print('\t\tReading genes and cells', flush=True)
     with gzip.open(gene_path) as file: # read gene names
         genes = pd.read_csv(file, header=None, sep=' ', ).squeeze()
     with gzip.open(cell_path) as file:
         cells = pd.read_csv(file,header=None, sep=' ', ).squeeze()
+    print('\t\tReading variant data', flush=True)
+    with gzip.open(v2c_path) as file: # read cell tags
+        v2c = pd.read_csv(file, sep='\t', usecols=['cell','variant'])
+    variant_data = pd.read_csv(variant_path, index_col=0)
+
     print('\tMerging and processing...' ,flush=True)
     #pivot 
     counts['gene_name'] = genes.loc[counts.gene].reset_index(drop=True)
     counts['cell_name'] = cells.loc[counts.cell].reset_index(drop=True)
     # counts = counts.drop(columns=['cell','gene']) #unnecessary : included in pivot
     counts = counts.pivot(index='cell_name',columns='gene_name',values='reads')
-
-    with gzip.open(v2c_path) as file: # read cell tags
-        v2c = pd.read_csv(file, sep='\t', )
-    v2c = v2c[['cell','variant']]
+    counts = counts.fillna(0) # pivot will create NA where the .mtx file was sparse
     # read variant impact class
-    variant_data = pd.read_csv(variant_path, index_col=0)
     variant_data = variant_data['Variant functional class']
     variant_data = variant_data.replace({'Impactful IV (gain-of-function)':'Impactful IV'})
     variant_data = variant_data[variant_data!='unavailable']

@@ -1,3 +1,4 @@
+import argparse
 from data_utils import *
 from models import *
 from contrastive_data import make_loaders
@@ -19,7 +20,8 @@ import sys
 # config 
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
-    'standard':SiameseLoss
+    'standard':SiameseLoss,
+    'lecun':LeCunContrastiveLoss
 }
 
 
@@ -64,29 +66,31 @@ def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_ta
 
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
-                 loss_fn, device, margin, n_epoch=10_000, 
+                 loss_fn, margin, n_epoch=10_000, 
                  lr=1e-3, weight_decay=0.001
                  ):
     i_0 = run_meta['i']
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     print(optimizer)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
     best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
-        metrics_train = train_loop(train, model, loss_fn, optimizer, device)
+        metrics_train = train_loop(train, model, loss_fn, optimizer)
         write_metrics(metrics_train, writer, 'train', i)
-        metrics_seen =  test_loop(test_seen, model, loss_fn, device, margin=margin)
+        metrics_seen =  test_loop(test_seen, model, loss_fn, margin=margin)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen['roc'] > best_score:
-            best_score = metrics_seen['roc'].item()
+            best_score = metrics_seen['roc']
             torch.save(model, join(run_dir, 'best_model.pkl'))
             with open(join(run_dir, 'best_score.json'), 'w') as file:
                 json.dump({'i':i, 'roc_seen':best_score}, file, sort_keys=True, indent=2)
+        scheduler.step(metrics_seen['roc'], epoch=i)
 
         if test_unseen is not None:
-            metrics_unseen = test_loop(test_unseen, model, loss_fn, device, margin=margin)
+            metrics_unseen = test_loop(test_unseen, model, loss_fn, margin=margin)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, model_file)
@@ -97,7 +101,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 
-def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer, device)-> Tensor:
+def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer)-> Tensor:
     model.train()
     loss_l = []
     y_l = []
@@ -124,11 +128,12 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
         'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'roc': ROC_score(y, d)[0].item()
+        'roc': ROC_score(y, d)[0].item(),
+        'lr':optimizer.param_groups[0]['lr']
     }
     return metrics
 
-def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, device, margin, ) -> Dict[str, float|Dict]:
+def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin, ) -> Dict[str, float|Dict]:
     model.eval()
     loss_l = []
     y_l = []
@@ -161,12 +166,9 @@ def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, device,
 
 
 
-def main(args):
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f'Using {device}.')
-    paths = get_paths(args.data_path)
-    print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
+def main(args, counts, unseen_frac = 0.25):
+    print(f"{run_dir=}")
+
     index_dir = join(run_dir, 'split')
     model_file = join(run_dir,'model.pkl')
     meta_file = join(run_dir, 'meta.json')
@@ -177,7 +179,7 @@ def main(args):
         with open(meta_file, 'r') as file:
             run_meta = json.load(file) # data that we want to keep between restarts
     else:
-        dataframes = split(counts) #random split
+        dataframes = split(counts, x_var=unseen_frac) #random split
         # save split
         make_dir_if_needed(index_dir)
         for i, df in enumerate(dataframes):
@@ -191,7 +193,7 @@ def main(args):
         run_meta = {
             'i':0,
         }
-    
+    print(f"Dataset sizes : "+', '.join(str(df.shape[0]) for df in dataframes))
     train, test_seen, test_unseen = make_loaders(
         *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
         pos_frac = args.positive_fraction )
@@ -200,15 +202,24 @@ def main(args):
     print(model)
     loss_fn = loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
-                loss_fn, device, 
+                loss_fn, 
                 margin=args.margin, lr=args.lr, n_epoch=args.n_epochs,
                 weight_decay=args.weight_decay
                 )
+    
+def test(args):
+    print('---RUNNING TEST--- ')
+    args.data_path = None
+    args.restart = False
+    make_dir_if_needed(run_dir)
+    counts = pd.read_csv('/home/lguirardel/data/perturb_comp/data/KRAS_test.csv', index_col=0)
 
+    main(args, counts, unseen_frac=0)
+    
 
 if __name__ == '__main__':
     parser = ArgumentParser('''Train and evaluate a contrastive model on Ursu et al. data''')
-    parser.add_argument('data_path', help='Path to data directory. Should contain')
+    parser.add_argument('data_path', help='Path to data directory. ')
     parser.add_argument('run_name',)
 
     parser.add_argument('--restart', action='store_true')
@@ -231,10 +242,23 @@ if __name__ == '__main__':
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension')
     parser.add_argument('--n-workers', default=4, type=int, help='Number of workers for datalaoding')
     parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
+    
+    parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
     args = parser.parse_args()
 
-    run_dir = join('models',args.run_name) # GLOBAL VARIABLE
-    run_name = args.run_name #GLOBAL VARIABLE #might not be justified
+    # GLOBAL VARIABLES
+    #This should only contain whatever I would be comfortable setting in a notebook lower namespace
+    run_dir = join('models',args.run_name) if not args.run_test else join('models', '_test')# GLOBAL VARIABLE
+    run_name = args.run_name if not args.run_test else 'TEST' #GLOBAL VARIABLE #might not be justified
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f'Using {device}.')
+
+    # run test
+    if args.run_test:
+        test(args)
+        print('Test concluded.')
+        sys.exit()
+
     # argument compatibility check
     if args.restart:
         sources = parser._source_to_settings
@@ -254,5 +278,10 @@ if __name__ == '__main__':
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     print()
-    main(args)
+
+    paths = get_paths(args.data_path)
+    print(f'Loading data from {args.data_path}...', flush=True)
+    counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
+
+    main(args, counts)
     

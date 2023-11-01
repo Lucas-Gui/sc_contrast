@@ -36,12 +36,33 @@ class SiameseLoss(ContrastiveLoss):
             e1, e2 (Tensors): embeddings
             y1, y2 (any) : labels    
         """
-        loss = 0
+        loss = 0 # it would be prettier to have the embedding penalty somewhere else, but whatever
         loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
         d = torch.norm((e1-e2), p=2, dim=-1)
         loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
         return loss.mean()
     
+class LeCunContrastiveLoss():
+    '''
+    $L = (Y)\\frac{2}{Q} ||e_1 - e_2||_1^2 + (1-Y) 2Q\exp{-\\frac{2.77}{Q}||e_1 - e_2||_1}$
+    '''
+    def __init__(self, margin, alpha) -> None:
+        self.alpha = alpha
+        self.margin = margin
+
+    def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
+        """
+        Compute the siamese loss.
+        args:
+            e1, e2 (Tensors): embeddings
+            y1, y2 (any) : labels    
+        """
+        loss = 0
+        loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
+        d = torch.norm((e1-e2), p=1, dim=-1)
+        loss = loss + y* d**2 *2/self.margin + (~y)* 2*self.margin*torch.exp(-2.77/self.margin*d)
+        return loss.mean()
+
 # metrics
 def accuracy(e1: Tensor, e2: Tensor, y, margin):
     d = (e1 - e2).norm(p=2)
