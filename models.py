@@ -50,6 +50,9 @@ class LeCunContrastiveLoss():
         self.alpha = alpha
         self.margin = margin
 
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        return self.forward(*args, **kwds)
+
     def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
         """
         Compute the siamese loss.

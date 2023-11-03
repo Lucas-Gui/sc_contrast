@@ -66,31 +66,31 @@ def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_ta
 
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
-                 loss_fn, margin, n_epoch=10_000, 
-                 lr=1e-3, weight_decay=0.001
+                 loss_fn, margin, device, n_epoch=10_000, 
+                 lr=1e-3, weight_decay=0.001, 
                  ):
     i_0 = run_meta['i']
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     print(optimizer)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
     best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
-        metrics_train = train_loop(train, model, loss_fn, optimizer)
+        metrics_train = train_loop(train, model, loss_fn, optimizer, device=device)
         write_metrics(metrics_train, writer, 'train', i)
-        metrics_seen =  test_loop(test_seen, model, loss_fn, margin=margin)
+        metrics_seen =  test_loop(test_seen, model, loss_fn, margin=margin, device=device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen['roc'] > best_score:
             best_score = metrics_seen['roc']
             torch.save(model, join(run_dir, 'best_model.pkl'))
             with open(join(run_dir, 'best_score.json'), 'w') as file:
                 json.dump({'i':i, 'roc_seen':best_score}, file, sort_keys=True, indent=2)
-        scheduler.step(metrics_seen['roc'], epoch=i)
+        scheduler.step(metrics_seen['roc'])
 
         if test_unseen is not None:
-            metrics_unseen = test_loop(test_unseen, model, loss_fn, margin=margin)
+            metrics_unseen = test_loop(test_unseen, model, loss_fn, margin=margin, device=device)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, model_file)
@@ -101,7 +101,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 
-def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer)-> Tensor:
+def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer, device)-> Tensor:
     model.train()
     loss_l = []
     y_l = []
@@ -133,7 +133,7 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
     }
     return metrics
 
-def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin, ) -> Dict[str, float|Dict]:
+def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin, device) -> Dict[str, float|Dict]:
     model.eval()
     loss_l = []
     y_l = []
@@ -166,7 +166,7 @@ def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin,
 
 
 
-def main(args, counts, unseen_frac = 0.25):
+def main(args, counts, unseen_frac = 0.25, device='cuda'):
     print(f"{run_dir=}")
 
     index_dir = join(run_dir, 'split')
@@ -202,7 +202,7 @@ def main(args, counts, unseen_frac = 0.25):
     print(model)
     loss_fn = loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
-                loss_fn, 
+                loss_fn, device=device,
                 margin=args.margin, lr=args.lr, n_epoch=args.n_epochs,
                 weight_decay=args.weight_decay
                 )
@@ -250,8 +250,7 @@ if __name__ == '__main__':
     #This should only contain whatever I would be comfortable setting in a notebook lower namespace
     run_dir = join('models',args.run_name) if not args.run_test else join('models', '_test')# GLOBAL VARIABLE
     run_name = args.run_name if not args.run_test else 'TEST' #GLOBAL VARIABLE #might not be justified
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f'Using {device}.')
+
 
     # run test
     if args.run_test:
@@ -278,7 +277,8 @@ if __name__ == '__main__':
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     print()
-
+    device = 'cuda' if torch.cuda.is_available() else 'cpu' #do not use as global : this will not work in jupyter
+    print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
     counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
