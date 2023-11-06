@@ -66,25 +66,6 @@ class LeCunContrastiveLoss():
         loss = loss + y* d**2 *2/self.margin + (~y)* 2*self.margin*torch.exp(-2.77/self.margin*d)
         return loss.mean()
 
-# metrics
-def accuracy(e1: Tensor, e2: Tensor, y, margin):
-    d = (e1 - e2).norm(p=2)
-    return torch.logical_xor(y, d>margin).float().mean()
-
-def ROC_score(y:Tensor, d:Tensor, eps = 1e-2):
-    '''
-    args:
-        d (Tensor): example pair distances
-        y (Tensor): example pair labels (1 if example belongs to the same class)
-    '''
-    d = (d - d.min())/(d.max() - d.min())
-    s = y.mean(dtype=torch.float32)
-    t = torch.arange(0,1,eps).reshape((-1,1)) #classification thresholds (T, 1) -> will broadcast to (T, N) with d and y
-    tpr = ((d<t)*y).mean(dim=1, dtype=torch.float32)/s # (d<t) : predicted true; y : actual true; s : sum of actual true
-    fpr = ((d<t)* (~y)).mean(dim=1, dtype=torch.float32)/(1-s) # (d<t) : predicted true; y : actual false; 1-s : sum of actual true
-    # integration by sum of trapezes
-    roc = 1/2 * ((fpr[1:] - fpr[:-1])*(tpr[1:] + tpr[:-1])).sum() 
-    return roc, tpr, fpr
 
 class Siamese(Module):
     '''

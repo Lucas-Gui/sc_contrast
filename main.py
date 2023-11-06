@@ -2,6 +2,7 @@ import argparse
 from data_utils import *
 from models import *
 from contrastive_data import make_loaders
+from scoring import *
 
 from configargparse import ArgumentParser
 import torch 
@@ -240,7 +241,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension')
-    parser.add_argument('--n-workers', default=4, type=int, help='Number of workers for datalaoding')
+    parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
     parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
     
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
