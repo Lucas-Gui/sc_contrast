@@ -1,3 +1,6 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning) #silence pandas warning about is_sparse
+
 import argparse
 from data_utils import *
 from models import *
@@ -67,7 +70,7 @@ def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_ta
 
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
-                 loss_fn, margin, device, n_epoch=10_000, 
+                 loss_fn, device, n_epoch=10_000, 
                  lr=1e-3, weight_decay=0.001, 
                  ):
     i_0 = run_meta['i']
@@ -81,7 +84,8 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         bar.set_postfix({'i':i})
         metrics_train = train_loop(train, model, loss_fn, optimizer, device=device)
         write_metrics(metrics_train, writer, 'train', i)
-        metrics_seen =  test_loop(test_seen, model, loss_fn, margin=margin, device=device)
+        metrics_seen =  test_loop(test_seen, model, loss_fn, device=device)
+        metrics_seen['1nn'] = knn_class_score(model.network, train.dataset.x,test_seen.dataset.x, train.dataset.y, test_seen.dataset.y, k=1, device=device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen['roc'] > best_score:
             best_score = metrics_seen['roc']
@@ -91,7 +95,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         scheduler.step(metrics_seen['roc'])
 
         if test_unseen is not None:
-            metrics_unseen = test_loop(test_unseen, model, loss_fn, margin=margin, device=device)
+            metrics_unseen = test_loop(test_unseen, model, loss_fn, device=device)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, model_file)
@@ -134,7 +138,7 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
     }
     return metrics
 
-def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin, device) -> Dict[str, float|Dict]:
+def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, device) -> Dict[str, float|Dict]:
     model.eval()
     loss_l = []
     y_l = []
@@ -197,14 +201,15 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
     print(f"Dataset sizes : "+', '.join(str(df.shape[0]) for df in dataframes))
     train, test_seen, test_unseen = make_loaders(
         *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
-        pos_frac = args.positive_fraction )
+        pos_frac = args.positive_fraction, device=device )
     in_shape = next(iter(train))[0][0].shape[1]
+
 
     print(model)
     loss_fn = loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
                 loss_fn, device=device,
-                margin=args.margin, lr=args.lr, n_epoch=args.n_epochs,
+                lr=args.lr, n_epoch=args.n_epochs,
                 weight_decay=args.weight_decay
                 )
     

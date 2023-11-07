@@ -5,12 +5,12 @@ import pandas as pd
 from typing import *
 
 class _DfDataset(Dataset):
-    def __init__(self, df:pd.DataFrame) -> None:
+    def __init__(self, df:pd.DataFrame, device) -> None:
         super().__init__()
         self.y = df['variant'].reset_index(drop=True)
         self.x = torch.tensor(
                 df.drop(columns=['variant','Variant functional class']).to_numpy(), 
-            dtype=torch.float32)
+            dtype=torch.float32, device=device)
     
     def __len__(self):
         return len(self.y)
@@ -20,11 +20,11 @@ class _DfDataset(Dataset):
     
 class SiameseDataset(_DfDataset):
 
-    def __init__(self, df: pd.DataFrame, p=0.5) -> None:
+    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu') -> None:
         '''
         p : probability to choose a positive pair at each pair sampling
         '''
-        super().__init__(df)
+        super().__init__(df, device=device)
         self.p = p
     
     def __getitem__(self, index) -> Any:
@@ -49,16 +49,16 @@ class BipartiteDataset(Dataset):
     Iterates over df1, and samples a second random example, either from df1, in the same class as x1 (with probability p1) or df2
     '''
     # Positive examples are still same-label pairs and NOT pairs with both examples from df1.
-    def __init__(self, df1:pd.DataFrame, df2:pd.DataFrame, p1=0.5) -> None:
+    def __init__(self, df1:pd.DataFrame, df2:pd.DataFrame, p1=0.5, device='cpu') -> None:
         super().__init__()
         self.y1 = df1['variant'].reset_index(drop=True)
         self.x1 = torch.tensor(
                 df1.drop(columns=['variant','Variant functional class']).to_numpy(), 
-            dtype=torch.float32)
+            dtype=torch.float32, device=device)
         self.y2 = df2['variant'].reset_index(drop=True)
         self.x2 = torch.tensor(
                 df2.drop(columns=['variant','Variant functional class']).to_numpy(), 
-            dtype=torch.float32)
+            dtype=torch.float32, device=device)
         self.p1 = p1
     
     def __len__(self):
@@ -78,7 +78,7 @@ class BipartiteDataset(Dataset):
         y = torch.tensor(y1==y2.item())
         return (x1,x2), y #,i
 
-def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8, pos_frac=0.5):
+def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8, pos_frac=0.5, device='cpu') -> Tuple[DataLoader]:
     '''
     pos_frac : fraction of positive pairs in training set (first dataloader.).
     Other dataloaders will have a 50% fraction of positive pairs.
@@ -88,6 +88,6 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
         if len(df) ==0:
             dls.append(None)
             continue
-        ds = dataset_class(df, p=pos_frac if i==0 else 0.5)
+        ds = dataset_class(df, p=pos_frac if i==0 else 0.5, device=device)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls

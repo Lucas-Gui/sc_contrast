@@ -6,12 +6,18 @@ from torch import Tensor
 from torch.nn import Module
 import torch.nn as nn
 from typing import *
+import pandas as pd
 
 # Loss
 
 class ContrastiveLoss():
     alpha:float
     margin:float
+
+    def __init__(self, margin, alpha) -> None:
+        self.alpha = alpha
+        self.margin = margin
+    
     def forward(self, embeddings, y) -> Tensor:
         raise NotImplementedError
     
@@ -25,10 +31,6 @@ class SiameseLoss(ContrastiveLoss):
         margin: distance threshold for different classes
         alpha: l2 regularization coefficient applied to embeddings
     '''
-    def __init__(self, margin, alpha) -> None:
-        self.alpha = alpha
-        self.margin = margin
-
     def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
         """
         Compute the siamese loss.
@@ -42,16 +44,10 @@ class SiameseLoss(ContrastiveLoss):
         loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
         return loss.mean()
     
-class LeCunContrastiveLoss():
+class LeCunContrastiveLoss(ContrastiveLoss):
     '''
     $L = (Y)\\frac{2}{Q} ||e_1 - e_2||_1^2 + (1-Y) 2Q\exp{-\\frac{2.77}{Q}||e_1 - e_2||_1}$
     '''
-    def __init__(self, margin, alpha) -> None:
-        self.alpha = alpha
-        self.margin = margin
-
-    def __call__(self, *args: Any, **kwds: Any) -> Any:
-        return self.forward(*args, **kwds)
 
     def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
         """
@@ -65,7 +61,28 @@ class LeCunContrastiveLoss():
         d = torch.norm((e1-e2), p=1, dim=-1)
         loss = loss + y* d**2 *2/self.margin + (~y)* 2*self.margin*torch.exp(-2.77/self.margin*d)
         return loss.mean()
+    
 
+class BatchContrastiveLoss(ContrastiveLoss):
+    '''
+    See Khosla et al, 2020
+    '''
+
+    def forward(self, embeddings:Tensor, y:pd.Series) -> Tensor:
+        cross = pd.merge(y,y, how='cross') # cross product
+        cross['positive'] = (cross['variant_x'] == cross['variant_y'])
+        positive = cross.pivot(index='variant_x',columns='variant_y',values='positive').to_numpy()
+        positive = torch.tensor(positive, device=embeddings.device) # positive[i,j] = (y_i == y_j)
+
+        Z = embeddings @ embeddings.T / self.margin 
+        Z = Z.exp() # Z(i,j) = exp( z_i . z_j /\tau)
+
+        A = (Z * (~ torch.eye(Z.shape[0], dtype=bool, device=Z.device)))
+        A = A.sum(dim=-1, keepdim=True) # \sum_{a \in A(i)} exp(z_i z_a/t) # shape N,1
+        
+        P = ((Z / A).log() * positive).sum(-1) # \sum_{p \in P(i)} \frac{\exp(z_i z_p/t)}{\sum_{a \in A(i)} \exp(z_i z_a/t)}
+        P = - P/ positive.sum(dim=-1)
+        return P.mean() # original is sum but we want to divide by the number of examples
 
 class Siamese(Module):
     '''
