@@ -1,6 +1,6 @@
 from torch import Tensor
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import ConcatDataset, Dataset, DataLoader
 import pandas as pd
 from typing import *
 
@@ -15,7 +15,7 @@ class _DfDataset(Dataset):
     def __len__(self):
         return len(self.y)
     
-    # def __getitem__(self, index) -> Tuple[Tuple[Tensor]]:
+    # def __getitem__(self, index) -> Tuple[Tuple[Tensor], Tensor]:
     #     raise NotImplementedError
     
 class SiameseDataset(_DfDataset):
@@ -41,6 +41,16 @@ class SiameseDataset(_DfDataset):
         x2 = self.x[i]
         y = torch.tensor(y)
         return (x1,x2), y #,i
+    
+class ClassifierDataset(_DfDataset):
+    '''
+    p is ignored
+    '''
+    def __init__(self, df: pd.DataFrame, p=None) -> None:
+        super().__init__(df)
+
+    def __getitem__(self, index) -> Any:
+        return (self.x[index],), self.y[index] # TODO : check that self.y is actually a Tensor
     
 
 class BipartiteDataset(Dataset):

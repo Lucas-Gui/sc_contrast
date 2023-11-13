@@ -1,7 +1,7 @@
 import argparse
 from data_utils import *
 from models import *
-from contrastive_data import make_loaders
+from contrastive_data import *
 from scoring import *
 
 from configargparse import ArgumentParser
@@ -18,6 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 import json
 import sys
 from warnings import warn
+from dataclasses import dataclass
 
 # config 
 
@@ -26,6 +27,17 @@ loss_dict : Dict[str, Type[ContrastiveLoss]] = {
     'lecun':LeCunContrastiveLoss
 }
 
+@dataclass
+class _Config():
+    loss_dict:dict
+    model_class:Type[Module]
+    dataset_class:Type[Dataset]
+
+config_dict:Dict[str, _Config] = {
+    'siamese':_Config(loss_dict, Siamese, SiameseDataset),
+    'classifier':_Config({'standard', nn.CrossEntropyLoss}, Classifier, ClassifierDataset)
+
+}
 
 def make_dir_if_needed(path):
     if not os.path.exists(path):
@@ -174,6 +186,8 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
     index_dir = join(run_dir, 'split')
     model_file = join(run_dir,'model.pkl')
     meta_file = join(run_dir, 'meta.json')
+
+    config = config_dict[args.task]
     if args.restart : #load model and split
         dataframes = load_split(index_dir, counts)
         print(f'Loading model from {model_file}')
@@ -188,9 +202,10 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
             df = pd.DataFrame(index=df.index).reset_index()
             df.to_csv(join(index_dir,f'index_{i}.csv'))
         in_shape = dataframes[0].shape[1]-2
-        model = Siamese(
-            MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
-                output_shape=args.embed_dim), normalize=~ args.no_norm_embeds
+        model = config.model_class(
+                MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
+                    output_shape=args.embed_dim, normalize=~ args.no_norm_embeds),
+            n_class = dataframes[0]['variant'].nunique() # class-specific kwargs
                             ).to(device)
         run_meta = {
             'i':0,
@@ -198,11 +213,11 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
     print(f"Dataset sizes : "+', '.join(str(df.shape[0]) for df in dataframes))
     train, test_seen, test_unseen = make_loaders(
         *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
-        pos_frac = args.positive_fraction )
+        pos_frac = args.positive_fraction, dataset_class=config.dataset_class )
     in_shape = next(iter(train))[0][0].shape[1]
 
     print(model)
-    loss_fn = loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
+    loss_fn = config.loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
                 loss_fn, device=device,
                 margin=args.margin, lr=args.lr, n_epoch=args.n_epochs,
@@ -246,8 +261,9 @@ if __name__ == '__main__':
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension')
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
     parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
-    
+    parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize')
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
+    
     args = parser.parse_args()
 
     # GLOBAL VARIABLES

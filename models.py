@@ -5,6 +5,7 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 import torch.nn as nn
+import torch.nn.functional as f
 from typing import *
 
 # Loss
@@ -73,10 +74,9 @@ class Siamese(Module):
     args :
         network : inner module of the network. Must be correctly initialised. 
     '''
-    def __init__(self, network, normalize=True) -> None:
+    def __init__(self, network,**kwargs) -> None:
         super().__init__()
         self.network = network
-        self.normalize=normalize
 
     def forward(self, x1: Tensor, x2:Tensor, ):
         """
@@ -85,14 +85,33 @@ class Siamese(Module):
         """
         e1 = self.network(x1)
         e2 = self.network(x2)
-        if self.normalize:
-            e1 = e1/torch.norm(e1, dim=-1)
-            e2 = e2/torch.norm(e2, dim=-1)
+
         return e1, e2
+
+
+class Classifier(Module):
+    '''
+    A model that learns embeddings through a classification task.
+    args :
+        network : inner module of the network. Must be correctly initialised. 
+    '''
+    def __init__(self, network, n_class, **kwargs) -> None:
+        super().__init__()
+        self.network = network
+        self.output_layer = nn.Linear(network.output_shape, n_class)
+
+    def forward(self, x: Tensor, ):
+        """
+        args:
+            x: Input tensor
+        """
+        x = self.network(x)
+        logits = self.output_layer(f.relu(x))
+        return (logits,)
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
-                 output_shape:int=20, act = nn.ELU(), dropout = None) -> None:
+                 output_shape:int=20, act = nn.ELU(), dropout = None, normalize=True) -> None:
         super().__init__()
         shape = [input_shape, *inner_shape, ]
         modules = []
@@ -103,9 +122,13 @@ class MLP(Module):
                 modules.append(nn.Dropout(p = dropout))
         modules.append(nn.Linear(inner_shape[-1], output_shape))
         self.layers = nn.Sequential(*modules)
+        self.normalize=normalize
 
     def forward(self, x:Tensor) -> Tensor:
-        return self.layers.forward(x)
+        x = self.layers.forward(x)
+        if self.normalize:
+            x = x/torch.norm(x, dim=-1)
+        return x
 
 
 

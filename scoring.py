@@ -32,3 +32,6 @@ def knn_class_score(model:torch.nn.Module, x_train:Tensor, x_test:Tensor, y_trai
     knn = KNeighborsClassifier(k)
     knn.fit(emb_train, y_train)
     return knn.score(emb_test, y_test)
+
+
+
