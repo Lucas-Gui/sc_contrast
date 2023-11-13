@@ -17,6 +17,7 @@ from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import json
 import sys
+from warnings import warn
 
 # config 
 
@@ -189,7 +190,7 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
         in_shape = dataframes[0].shape[1]-2
         model = Siamese(
             MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
-                output_shape=args.embed_dim)
+                output_shape=args.embed_dim), normalize=~ args.no_norm_embeds
                             ).to(device)
         run_meta = {
             'i':0,
@@ -235,8 +236,10 @@ if __name__ == '__main__':
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--lr',type=float, default=1e-3, )
     parser.add_argument('-n','--n-epochs', metavar='N', default=10_000, type=int, help='Number of epochs to run')
-    parser.add_argument('--split-wt-like',action='store_true', default=False,
+    parser.add_argument('--split-wt-like',action='store_true', 
                         help='If not passed, group all WT-like variants in the same class')
+    parser.add_argument('--no-norm-embeds',action='store_true',
+                        help='If not passed, rescale emebeddings to unit norm')
     
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
@@ -264,7 +267,10 @@ if __name__ == '__main__':
         sources = parser._source_to_settings
         for arg in ['shape','embed_dim']:
             if sources['command_line'].get(arg) is not None:
-                print(f'Warning : restart : {arg} will be ignored')
+                warn(f'Warning : restart : {arg} will be ignored', )
+    if ~ args.no_norm_embeds and args.alpha :
+        warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
+    
     # safety overwriting check
     if os.path.exists(join(run_dir, 'config.ini')) and not args.restart and not args.overwrite:
         check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n] ')

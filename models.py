@@ -73,9 +73,10 @@ class Siamese(Module):
     args :
         network : inner module of the network. Must be correctly initialised. 
     '''
-    def __init__(self, network) -> None:
+    def __init__(self, network, normalize=True) -> None:
         super().__init__()
         self.network = network
+        self.normalize=normalize
 
     def forward(self, x1: Tensor, x2:Tensor, ):
         """
@@ -84,6 +85,9 @@ class Siamese(Module):
         """
         e1 = self.network(x1)
         e2 = self.network(x2)
+        if self.normalize:
+            e1 = e1/torch.norm(e1, dim=-1)
+            e2 = e2/torch.norm(e2, dim=-1)
         return e1, e2
     
 class MLP(Module):
