@@ -92,12 +92,16 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
     '''
     pos_frac : fraction of positive pairs in training set (first dataloader.).
     Other dataloaders will have a 50% fraction of positive pairs.
+    dataset_class : class for train dataset. Test datasets will always be SiameseDataset  
     '''
     dls = []
     for i, df in enumerate(dfs):
-        if len(df) ==0:
+        if len(df) == 0:
             dls.append(None)
             continue
-        ds = dataset_class(df, p=pos_frac if i==0 else 0.5)
+        if i == 0:
+            ds = dataset_class(df, p=pos_frac)
+        else :
+            ds = SiameseDataset(df, p=0.5)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls

@@ -20,6 +20,7 @@ import sys
 from warnings import warn
 from dataclasses import dataclass
 
+
 # config 
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
@@ -38,6 +39,17 @@ config_dict:Dict[str, _Config] = {
     'classifier':_Config({'standard', nn.CrossEntropyLoss}, Classifier, ClassifierDataset)
 
 }
+
+# context -> to put all global variables in the same place
+
+@dataclass 
+class Context():
+    device:str = 'cpu'
+    run_dir:str = None
+    run_name:str = None
+    run_type:str = None
+
+ctx = Context() # in a jupyter notebook, assign the correct values to this instance
 
 def make_dir_if_needed(path):
     if not os.path.exists(path):
@@ -80,7 +92,7 @@ def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_ta
 
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
-                 loss_fn, margin, device, n_epoch=10_000, 
+                 loss_fn, margin, n_epoch=10_000, 
                  lr=1e-3, weight_decay=0.001, 
                  ):
     i_0 = run_meta['i']
@@ -92,9 +104,9 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
     best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
-        metrics_train = train_loop(train, model, loss_fn, optimizer, device=device)
+        metrics_train = train_loop(train, model, loss_fn, optimizer)
         write_metrics(metrics_train, writer, 'train', i)
-        metrics_seen =  test_loop(test_seen, model, loss_fn, margin=margin, device=device)
+        metrics_seen =  test_loop(test_seen, model, loss_fn, margin=margin)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen['roc'] > best_score:
             best_score = metrics_seen['roc']
@@ -104,7 +116,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         scheduler.step(metrics_seen['roc'])
 
         if test_unseen is not None:
-            metrics_unseen = test_loop(test_unseen, model, loss_fn, margin=margin, device=device)
+            metrics_unseen = test_loop(test_unseen, model, loss_fn, margin=margin)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, model_file)
@@ -115,15 +127,15 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 
-def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer, device)-> Tensor:
+def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer)-> Tensor:
     model.train()
     loss_l = []
     y_l = []
     d_l = []
     norm_l = []
     for x,y in tqdm(train, position=1, desc='Training loop', leave=False):
-        x = (x_i.to(device) for x_i in x)
-        y = y.to(device)
+        x = (x_i.to(ctx.device) for x_i in x)
+        y = y.to(ctx.device)
         embeddings = model.forward(*x)
         loss:Tensor = loss_fn.forward(*embeddings, y)
         loss.backward()
@@ -131,23 +143,27 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         optimizer.zero_grad(set_to_none=True)
         loss_l.append(loss)
         y_l.append(y)
-        e1, e2 = embeddings
-        d_l.append(torch.norm(e1-e2, p=2, dim=-1)) #TODO : change to accomodate triplet loss
+        if ctx.run_type == 'siamese':
+            e1, e2,  = embeddings
+            d_l.append(torch.norm(e1-e2, p=2, dim=-1))
         norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
-    d = torch.concat(d_l).detach().cpu()
     y = torch.concat(y_l).detach().cpu()
     norm = torch.concat(norm_l).detach().cpu()
     metrics = {
-        'dist_pos' : ((d*y).sum()/y.sum()).item(),
-        'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
         'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'roc': ROC_score(y, d)[0].item(),
         'lr':optimizer.param_groups[0]['lr']
     }
+    if ctx.run_type in ['siamese']:
+        d = torch.concat(d_l).detach().cpu()
+        metrics.update({
+        'dist_pos' : ((d*y).sum()/y.sum()).item(),
+        'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
+        'roc': ROC_score(y, d)[0].item(),
+        })
     return metrics
 
-def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin, device) -> Dict[str, float|Dict]:
+def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin) -> Dict[str, float|Dict]:
     model.eval()
     loss_l = []
     y_l = []
@@ -155,8 +171,8 @@ def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin,
     norm_l = []
     with torch.no_grad():
         for x,y in tqdm(test, position=1, desc='Testing loop', leave=False):
-            x = (x_i.to(device) for x_i in x)
-            y = y.to(device)
+            x = (x_i.to(ctx.device) for x_i in x)
+            y = y.to(ctx.device)
             embeddings = model.forward(*x)
             loss:Tensor = loss_fn(*embeddings, y)
             loss_l.append(loss)
@@ -180,7 +196,7 @@ def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, margin,
 
 
 
-def main(args, counts, unseen_frac = 0.25, device='cuda'):
+def main(args, counts, unseen_frac = 0.25):
     print(f"{run_dir=}")
 
     index_dir = join(run_dir, 'split')
@@ -206,7 +222,7 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
                 MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim, normalize=~ args.no_norm_embeds),
             n_class = dataframes[0]['variant'].nunique() # class-specific kwargs
-                            ).to(device)
+                            ).to(ctx.device)
         run_meta = {
             'i':0,
         }
@@ -219,7 +235,7 @@ def main(args, counts, unseen_frac = 0.25, device='cuda'):
     print(model)
     loss_fn = config.loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
-                loss_fn, device=device,
+                loss_fn,
                 margin=args.margin, lr=args.lr, n_epoch=args.n_epochs,
                 weight_decay=args.weight_decay
                 )
@@ -266,10 +282,9 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    # GLOBAL VARIABLES
-    #This should only contain whatever I would be comfortable setting in a notebook lower namespace
-    run_dir = join('models',args.run_name) if not args.run_test else join('models', '_test')# GLOBAL VARIABLE
-    run_name = args.run_name if not args.run_test else 'TEST' #GLOBAL VARIABLE #might not be justified
+ 
+    run_dir = join('models',args.run_name) if not args.run_test else join('models', '_test')
+    run_name = args.run_name if not args.run_test else 'TEST' 
 
 
     # run test
@@ -300,11 +315,12 @@ if __name__ == '__main__':
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     print()
-    device = 'cuda' if torch.cuda.is_available() else 'cpu' #do not use as global : this will not work in jupyter
+    device = 'cuda' if torch.cuda.is_available() else 'cpu' 
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
     counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
 
+    ctx = Context(device, run_dir, run_name, run_type=args.task)
     main(args, counts)
     
