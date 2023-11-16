@@ -50,8 +50,8 @@ class ClassifierDataset(_DfDataset):
     '''
     p is ignored
     '''
-    def __init__(self, df: pd.DataFrame, p=None) -> None:
-        super().__init__(df)
+    def __init__(self, df: pd.DataFrame, p=None, device='cpu') -> None:
+        super().__init__(df, device=device)
 
     def __getitem__(self, index) -> Any:
         return (self.x[index],), self.y[index] # TODO : check that self.y is actually a Tensor
