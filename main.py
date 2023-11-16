@@ -81,7 +81,7 @@ def load_split(index_dir, counts) -> List[pd.DataFrame]:
             i+=1
         return dataframes
 
-def write_metrics(metrics:  Dict[str, float|Dict], writer:SummaryWriter, main_tag:str, i):
+def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_tag:str, i):
     for tag, metric_or_dict in metrics.items():
         if isinstance(metric_or_dict, dict):
             writer.add_scalars(f'{main_tag}/{tag}', metric_or_dict, i)
