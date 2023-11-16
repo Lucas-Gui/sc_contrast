@@ -1,6 +1,6 @@
 from torch import Tensor
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import ConcatDataset, Dataset, DataLoader
 import pandas as pd
 from typing import *
 
@@ -15,7 +15,7 @@ class _DfDataset(Dataset):
     def __len__(self):
         return len(self.y)
     
-    # def __getitem__(self, index) -> Tuple[Tuple[Tensor]]:
+    # def __getitem__(self, index) -> Tuple[Tuple[Tensor], Tensor]:
     #     raise NotImplementedError
 
 class BatchClassDataset(_DfDataset):
@@ -45,6 +45,16 @@ class SiameseDataset(_DfDataset):
         x2 = self.x[i]
         y = torch.tensor(y)
         return (x1,x2), y #,i
+    
+class ClassifierDataset(_DfDataset):
+    '''
+    p is ignored
+    '''
+    def __init__(self, df: pd.DataFrame, p=None) -> None:
+        super().__init__(df)
+
+    def __getitem__(self, index) -> Any:
+        return (self.x[index],), self.y[index] # TODO : check that self.y is actually a Tensor
     
 
 class BipartiteDataset(Dataset):
@@ -86,12 +96,16 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
     '''
     pos_frac : fraction of positive pairs in training set (first dataloader.).
     Other dataloaders will have a 50% fraction of positive pairs.
+    dataset_class : class for train dataset. Test datasets will always be SiameseDataset  
     '''
     dls = []
     for i, df in enumerate(dfs):
-        if len(df) ==0:
+        if len(df) == 0:
             dls.append(None)
             continue
-        ds = dataset_class(df, p=pos_frac if i==0 else 0.5, device=device)
+        if i == 0:
+            ds = dataset_class(df, p=pos_frac)
+        else :
+            ds = SiameseDataset(df, p=0.5)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls
