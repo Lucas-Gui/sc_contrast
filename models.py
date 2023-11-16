@@ -149,6 +149,7 @@ class MLP(Module):
         modules.append(nn.Linear(inner_shape[-1], output_shape))
         self.layers = nn.Sequential(*modules)
         self.normalize=normalize
+        self.output_shape=output_shape
 
     def forward(self, x:Tensor) -> Tensor:
         x = self.layers.forward(x)

@@ -234,7 +234,8 @@ def main(args, counts, unseen_frac = 0.25):
     print(f"Dataset sizes : "+', '.join(str(df.shape[0]) for df in dataframes))
     train, test_seen, test_unseen = make_loaders(
         *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
-        pos_frac = args.positive_fraction, dataset_class=config.dataset_class )
+        pos_frac = args.positive_fraction, dataset_class=config.dataset_class,
+        device=ctx.device)
     in_shape = next(iter(train))[0][0].shape[1]
 
 
@@ -266,7 +267,7 @@ if __name__ == '__main__':
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
     parser.add_argument('-m','--margin',default=1, type=float, help='Contrastive loss margin parameter')
-    parser.add_argument('-a','--alpha',default=1e-2, type=float, help='L2 embedding regularization')
+    parser.add_argument('-a','--alpha',default =0, type=float, help='L2 embedding regularization')
     parser.add_argument('-d','--dropout',default=0.2, type=float, help='Dropout frequency')
     parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
