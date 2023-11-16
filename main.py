@@ -227,7 +227,8 @@ def main(args, counts, unseen_frac = 0.25):
         model = config.model_class(
                 MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim, normalize=~ args.no_norm_embeds),
-            n_class = dataframes[0]['variant'].nunique() # class-specific kwargs
+            #task-specific kwargs
+            n_class = dataframes[0]['variant'].nunique() # should be equal to nb of codes 
                             ).to(ctx.device)
         run_meta = {
             'i':0,

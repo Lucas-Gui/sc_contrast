@@ -56,8 +56,11 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     and then a x_cell fraction as a seen-class test set 
     '''
     variants = data['variant'].unique()
-    n = len(variants)
-    test_vars = np.random.choice(variants, size=int(n*x_var), replace=False)
+    # reorder categories such that codes 0 ... m-1 are in seen and m ... n-1 in unseen
+    variants = np.random.permutation(variants)
+    test_vars = variants[-int(len(variants)*x_var):]
+    data['variant'] = data.variant.cat.reorder_categories(variants)
+
     test_unseen = data[data['variant'].isin(test_vars)]
     train = data[~data['variant'].isin(test_vars)]
     test_seen = train.sample(frac=x_cell, replace=False)
