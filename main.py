@@ -139,6 +139,7 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
     norm_l = []
     for x,y in tqdm(train, position=1, desc='Training loop', leave=False):
         x = (x_i.to(ctx.device) for x_i in x)
+        print(y)
         y = y.to(ctx.device)
         embeddings = model.forward(*x)
         loss:Tensor = loss_fn.forward(*embeddings, y)

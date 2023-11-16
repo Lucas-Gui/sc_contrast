@@ -154,7 +154,7 @@ class MLP(Module):
     def forward(self, x:Tensor) -> Tensor:
         x = self.layers.forward(x)
         if self.normalize:
-            x = x/torch.norm(x, dim=-1)
+            x = x/torch.norm(x, keepdim=True, dim=-1)
         return x
 
 
