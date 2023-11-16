@@ -7,7 +7,11 @@ from typing import *
 class _DfDataset(Dataset):
     def __init__(self, df:pd.DataFrame, device) -> None:
         super().__init__()
-        self.y = df['variant'].reset_index(drop=True)
+        variants = df['variant']
+        self.cats = variants.cat.categories
+        self.y = torch.tensor(
+            variants.cat.codes.to_numpy(), dtype=int, device=device
+        )
         self.x = torch.tensor(
                 df.drop(columns=['variant','Variant functional class']).to_numpy(), 
             dtype=torch.float32, device=device)
@@ -33,7 +37,7 @@ class SiameseDataset(_DfDataset):
     
     def __getitem__(self, index) -> Any:
         x1 = self.x[index]
-        y1 = self.y.iloc[index]
+        y1 = self.y[index]
         if torch.rand((1,)).item() < self.p: # randomly get same class or different class
             # same class case : positive pair
             i = self.y[self.y == y1].sample(1).index.item()
