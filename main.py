@@ -39,7 +39,7 @@ class _Config():
 
 config_dict:Dict[str, _Config] = {
     'siamese':_Config(loss_dict, Siamese, SiameseDataset),
-    'classifier':_Config({'standard', nn.CrossEntropyLoss}, Classifier, ClassifierDataset)
+    'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset)
 
 }
 
@@ -307,6 +307,8 @@ if __name__ == '__main__':
                 warn(f'Warning : restart : {arg} will be ignored', )
     if ~ args.no_norm_embeds and args.alpha :
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
+    if args.task == 'classifier' and args.alpha :
+        raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
     
     # safety overwriting check
     if os.path.exists(join(run_dir, 'config.ini')) and not args.restart and not args.overwrite:

@@ -24,7 +24,7 @@ class ContrastiveLoss():
     
     def __call__(self, *args: Any, **kwds: Any) -> Tensor:
         return self.forward(*args, **kwds)
-
+    
 
 class SiameseLoss(ContrastiveLoss):
     '''
@@ -44,6 +44,13 @@ class SiameseLoss(ContrastiveLoss):
         d = torch.norm((e1-e2), p=2, dim=-1)
         loss = loss + y*d**2 + (~y)*torch.maximum(self.margin - d, torch.zeros_like(d))**2
         return loss.mean()
+    
+class ClassifierLoss(ContrastiveLoss):
+    '''
+    CrossEntropy wrapper
+    '''
+    def forward(self, ypred, y) -> Tensor:
+        return f.cross_entropy(ypred, y, reduction='mean')
     
 class LeCunContrastiveLoss(ContrastiveLoss):
     '''
