@@ -110,7 +110,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         metrics_train = train_loop(train, model, loss_fn, optimizer)
         write_metrics(metrics_train, writer, 'train', i)
         metrics_seen =  test_loop(test_seen, model, loss_fn)
-        metrics_seen['1nn'] = knn_class_score(model.network, train.dataset.x,test_seen.dataset.x, train.dataset.y, test_seen.dataset.y, k=1, device=device)
+        metrics_seen['1nn'] = knn_class_score(model.network, train.dataset.x,test_seen.dataset.x, train.dataset.y, test_seen.dataset.y, k=1, device=ctx.device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen['roc'] > best_score:
             best_score = metrics_seen['roc']
