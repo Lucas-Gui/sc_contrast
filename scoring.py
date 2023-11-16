@@ -23,9 +23,12 @@ def ROC_score(y:Tensor, d:Tensor, eps = 1e-2):
     roc = 1/2 * ((fpr[1:] - fpr[:-1])*(tpr[1:] + tpr[:-1])).sum() 
     return roc, tpr, fpr
 
-def knn_class_score(model:torch.nn.Module, x_train:Tensor, x_test:Tensor, y_train, y_test, k=1, ):
+def knn_class_score(model:torch.nn.Module, x_train:Tensor, x_test:Tensor, y_train, y_test, k=1, device='cpu'):
     '''subset accuracy of labeling using the nearest projected neighbor'''
     model.eval()
+    model = model.to(device)
+    x_train = x_train.to(device)
+    x_test = x_test.to(device)
     with torch.no_grad():
         emb_train = model.forward(x_train).cpu()
         emb_test = model.forward(x_test).cpu()
