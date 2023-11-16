@@ -17,6 +17,10 @@ class _DfDataset(Dataset):
     
     # def __getitem__(self, index) -> Tuple[Tuple[Tensor]]:
     #     raise NotImplementedError
+
+class BatchClassDataset(_DfDataset):
+    """
+    Load"""
     
 class SiameseDataset(_DfDataset):
 

@@ -82,7 +82,9 @@ class BatchContrastiveLoss(ContrastiveLoss):
         
         P = ((Z / A).log() * positive).sum(-1) # \sum_{p \in P(i)} \frac{\exp(z_i z_p/t)}{\sum_{a \in A(i)} \exp(z_i z_a/t)}
         P = - P/ positive.sum(dim=-1)
-        return P.mean() # original is sum but we want to divide by the number of examples
+        loss = P # original is sum but we want to divide by the number of examples
+        loss = loss + self.alpha * torch.norm(embeddings, dim=-1)
+        return loss.mean()
 
 class Siamese(Module):
     '''
