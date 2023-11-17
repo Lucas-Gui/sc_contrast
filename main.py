@@ -151,11 +151,9 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         if ctx.run_type == 'siamese':
             e1, e2,  = embeddings
             d_l.append(torch.norm(e1-e2, p=2, dim=-1))
-        norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
+            norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
     y = torch.concat(y_l).detach().cpu()
-    norm = torch.concat(norm_l).detach().cpu()
     metrics = {
-        'l2_penalty':norm.mean().item(),
         'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
         'lr':optimizer.param_groups[0]['lr']
     }
@@ -164,6 +162,7 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         metrics.update({
         'dist_pos' : ((d*y).sum()/y.sum()).item(),
         'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
+        'l2_penalty': torch.concat(norm_l).cpu().mean().item(),
         'roc': ROC_score(y, d)[0].item(),
         })
     return metrics
