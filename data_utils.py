@@ -68,6 +68,8 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     print(f"Train length: {len(train)}")
     print(f"Seen test length  : {len(test_seen)}")
     print(f"Unseen test length: {len(test_unseen)}")
+    print(f"Categories in seen : {train.variant.nunique()}")
+    print(f"Categories in unseen : {test_unseen.variant.nunique()}")
 
     return train, test_seen, test_unseen
 

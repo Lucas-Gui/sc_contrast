@@ -32,13 +32,14 @@ class SiameseLoss(ContrastiveLoss):
         margin: distance threshold for different classes
         alpha: l2 regularization coefficient applied to embeddings
     '''
-    def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
+    def forward(self, e1: Tensor, e2: Tensor, y1 : Tensor, y2 : Tensor):
         """
         Compute the siamese loss.
         args:
             e1, e2 (Tensors): embeddings
             y1, y2 (any) : labels    
         """
+        y = y1 == y2
         loss = 0 # it would be prettier to have the embedding penalty somewhere else, but whatever
         loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
         d = torch.norm((e1-e2), p=2, dim=-1)
@@ -93,37 +94,53 @@ class BatchContrastiveLoss(ContrastiveLoss):
         loss = P # original is sum but we want to divide by the number of examples
         loss = loss + self.alpha * torch.norm(embeddings, dim=-1)
         return loss.mean()
+    
 
-class Siamese(Module):
+class Model(Module):
+    '''
+    A network that can produce embeddings
+    '''
+    def __init__(self, network : nn.Module, normalize=True) -> None:
+        super().__init__()
+        self.network = network
+        self.normalize = normalize
+
+    def embed(self, x:Tensor) -> Tensor:
+        x = self.network(x)
+        if self.normalize:
+            x = x/torch.norm(x, keepdim=True, dim=-1)
+        return x
+    
+    def forward(self, *x : List[Tensor]) -> Tuple[Tuple[Tensor, ...], Tensor]:
+        raise NotImplementedError
+    
+class Siamese(Model):
     '''
     A siamese network.
     args :
         network : inner module of the network. Must be correctly initialised. 
     '''
-    def __init__(self, network,**kwargs) -> None:
-        super().__init__()
-        self.network = network
+    def __init__(self, network, **kwargs) -> None:
+        super().__init__(network)
 
     def forward(self, x1: Tensor, x2:Tensor, ):
         """
         args:
             x1, x2 : Input tensors
         """
-        e1 = self.network(x1)
-        e2 = self.network(x2)
+        e1 = self.embed(x1)
+        e2 = self.embed(x2)
+        return (e1, e2), e1
 
-        return e1, e2
 
-
-class Classifier(Module):
+class Classifier(Model):
     '''
     A model that learns embeddings through a classification task.
     args :
         network : inner module of the network. Must be correctly initialised. 
     '''
     def __init__(self, network, n_class, **kwargs) -> None:
-        super().__init__()
-        self.network = network
+        super().__init__(network)
         self.output_layer = nn.Linear(network.output_shape, n_class)
 
     def forward(self, x: Tensor, ):
@@ -131,13 +148,13 @@ class Classifier(Module):
         args:
             x: Input tensor
         """
-        x = self.network(x)
+        x = self.embed(x)
         logits = self.output_layer(f.relu(x))
-        return (logits,)
+        return (logits,), x
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
-                 output_shape:int=20, act = nn.ELU(), dropout = None, normalize=True) -> None:
+                 output_shape:int=20, act = nn.ELU(), dropout = None) -> None:
         super().__init__()
         shape = [input_shape, *inner_shape, ]
         modules = []
@@ -148,13 +165,11 @@ class MLP(Module):
                 modules.append(nn.Dropout(p = dropout))
         modules.append(nn.Linear(inner_shape[-1], output_shape))
         self.layers = nn.Sequential(*modules)
-        self.normalize=normalize
         self.output_shape=output_shape
 
     def forward(self, x:Tensor) -> Tensor:
         x = self.layers.forward(x)
-        if self.normalize:
-            x = x/torch.norm(x, keepdim=True, dim=-1)
+
         return x
 
 

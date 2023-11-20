@@ -1,7 +1,6 @@
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning) #silence pandas warning about is_sparse
 
-import argparse
 from data_utils import *
 from models import *
 from contrastive_data import *
@@ -22,6 +21,7 @@ import json
 import sys
 from warnings import warn
 from dataclasses import dataclass
+from contextlib import nullcontext
 
 
 # config 
@@ -34,7 +34,7 @@ loss_dict : Dict[str, Type[ContrastiveLoss]] = {
 @dataclass
 class _Config():
     loss_dict:dict
-    model_class:Type[Module]
+    model_class:Type[Model]
     dataset_class:Type[Dataset]
 
 config_dict:Dict[str, _Config] = {
@@ -50,7 +50,8 @@ class Context():
     device:str = 'cpu'
     run_dir:str = None
     run_name:str = None
-    run_type:str = None
+    task:str = None
+    k_nn:int = 3
 
 ctx = Context() # in a jupyter notebook, assign the correct values to this instance
 
@@ -96,9 +97,10 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
                  loss_fn, n_epoch=10_000, 
-                 lr=1e-3, weight_decay=0.001, 
+                 lr=1e-3, weight_decay=0.001,
                  ):
     i_0 = run_meta['i']
+    stop_score = f'{ctx.k_nn}_nn_ref'
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     print(optimizer)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20)
@@ -107,20 +109,21 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
     best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
-        metrics_train = train_loop(train, model, loss_fn, optimizer)
+        metrics_train = core_loop(train, model, loss_fn, optimizer, mode='train')
         write_metrics(metrics_train, writer, 'train', i)
-        metrics_seen =  test_loop(test_seen, model, loss_fn)
-        metrics_seen['1nn'] = knn_class_score(model.network, train.dataset.x,test_seen.dataset.x, train.dataset.y, test_seen.dataset.y, k=1, device=ctx.device)
+        
+        metrics_seen =  core_loop(test_seen, model, loss_fn, optimizer=None, mode='test')
+        metrics_seen[f'{ctx.k_nn}_nn_ref'] = knn_ref_score(model, train.dataset.x,test_seen.dataset.x, train.dataset.y, test_seen.dataset.y, k=1, device=ctx.device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
-        if metrics_seen['roc'] > best_score:
-            best_score = metrics_seen['roc']
+        if metrics_seen[stop_score] > best_score:
+            best_score = metrics_seen[stop_score]
             torch.save(model, join(run_dir, 'best_model.pkl'))
             with open(join(run_dir, 'best_score.json'), 'w') as file:
-                json.dump({'i':i, 'roc_seen':best_score}, file, sort_keys=True, indent=2)
-        scheduler.step(metrics_seen['roc'])
+                json.dump({'i':i, f'{stop_score}_seen':best_score}, file, sort_keys=True, indent=2)
+        scheduler.step(metrics_seen[f'{ctx.k_nn}_nn_ref'])
 
         if test_unseen is not None:
-            metrics_unseen = test_loop(test_unseen, model, loss_fn,)
+            metrics_unseen = core_loop(test_unseen, model, loss_fn, optimizer=None, mode='test', unseen=True)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, model_file)
@@ -131,33 +134,51 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 
-def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optimizer:torch.optim.Optimizer)-> Tensor:
-    model.train()
+def core_loop(data:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, 
+              optimizer:torch.optim.Optimizer, mode:Literal['train','test'],
+              unseen=False)-> Tensor:
+    if mode == 'train':
+        model.train()
+    elif mode == 'test':
+        model.eval()
     loss_l = []
     y_l = []
     d_l = []
     norm_l = []
-    for x,y in tqdm(train, position=1, desc='Training loop', leave=False):
-        x = (x_i.to(ctx.device) for x_i in x)
-        print(y)
-        y = y.to(ctx.device)
-        embeddings = model.forward(*x)
-        loss:Tensor = loss_fn.forward(*embeddings, y)
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        loss_l.append(loss)
-        y_l.append(y)
-        if ctx.run_type == 'siamese':
-            e1, e2,  = embeddings
-            d_l.append(torch.norm(e1-e2, p=2, dim=-1))
-            norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
-    y = torch.concat(y_l).detach().cpu()
+    embeds = [] # store embeds for scoring
+    labels = [] # store labels for scoring
+    with torch.no_grad() if mode=='test' else nullcontext(): # disable grad only in test mode
+        for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, ):
+            x = [x_i.to(ctx.device) for x_i in x]
+            y = [y_i.to(ctx.device) for y_i in y]
+            outputs, emb = model.forward(*x)
+            if not unseen  or ctx.task not in ['classifier']: #avoid trying to classfify unseen classes
+                loss:Tensor = loss_fn.forward(*outputs, *y)
+                loss_l.append(loss)
+            if mode == 'train':
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            # keep first embed and label
+            embeds.append(emb)
+            labels.append(y[0])
+            if ctx.task == 'siamese':
+                y_l.append(y[0] == y[1])
+                e1, e2,  = outputs
+                d_l.append(torch.norm(e1-e2, p=2, dim=-1))
+                norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
+    labels = torch.concat(labels)
+    embeds = torch.concat(embeds)
+ 
     metrics = {
-        'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'lr':optimizer.param_groups[0]['lr']
+        f'{ctx.k_nn}_nn_self' : knn_self_score(embeds, labels)
     }
-    if ctx.run_type in ['siamese']:
+    if not unseen  or ctx.task not in ['classifier']: 
+        metrics['loss'] = np.mean( [t.detach().cpu().item() for t in loss_l])
+    if mode == 'train':
+        metrics['lr'] = optimizer.param_groups[0]['lr']
+    if ctx.task in ['siamese']:
+        y = torch.concat(y_l).detach().cpu()
         d = torch.concat(d_l).detach().cpu()
         metrics.update({
         'dist_pos' : ((d*y).sum()/y.sum()).item(),
@@ -166,39 +187,6 @@ def train_loop(train:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, optim
         'roc': ROC_score(y, d)[0].item(),
         })
     return metrics
-
-
-def test_loop(test:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss,) -> Dict[str, float|Dict]:
-    model.eval()
-    loss_l = []
-    y_l = []
-    d_l = []
-    norm_l = []
-    with torch.no_grad():
-        for x,y in tqdm(test, position=1, desc='Testing loop', leave=False):
-            x = (x_i.to(ctx.device) for x_i in x)
-            y = y.to(ctx.device)
-            embeddings = model.forward(*x)
-            loss:Tensor = loss_fn(*embeddings, y)
-            loss_l.append(loss)
-            y_l.append(y)
-            e1, e2 = embeddings
-            d_l.append(torch.norm(e1-e2, p=2, dim=-1)) #TODO : change to accomodate triplet loss
-            norm_l.append((torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))*loss_fn.alpha)
-    d = torch.concat(d_l).cpu()
-    y = torch.concat(y_l).cpu()
-    norm = torch.concat(norm_l).cpu()
-    metrics = {
-        'dist_pos' : ((d*y).sum()/y.sum()).item(),
-        'dist_neg' : ((d* ~y).sum()/(~y).sum()).item(),
-        'l2_penalty':norm.mean().item(),
-        'loss' : np.mean( [t.detach().cpu().item() for t in loss_l]),
-        'roc': ROC_score(y, d)[0].item(),
-        '_n_pos' : y.sum().item(),
-        '_n_neg' : (~y).sum().item(),
-    }
-    return metrics
-
 
 
 def main(args, counts, unseen_frac = 0.25):
@@ -225,14 +213,14 @@ def main(args, counts, unseen_frac = 0.25):
         in_shape = dataframes[0].shape[1]-2
         model = config.model_class(
                 MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
-                    output_shape=args.embed_dim, normalize=~ args.no_norm_embeds),
+                    output_shape=args.embed_dim,),
+            normalize=~ args.no_norm_embeds,
             #task-specific kwargs
             n_class = dataframes[0]['variant'].nunique() # should be equal to nb of codes 
                             ).to(ctx.device)
         run_meta = {
             'i':0,
         }
-    print(f"Dataset sizes : "+', '.join(str(df.shape[0]) for df in dataframes))
     train, test_seen, test_unseen = make_loaders(
         *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
         pos_frac = args.positive_fraction, dataset_class=config.dataset_class,
@@ -284,6 +272,7 @@ if __name__ == '__main__':
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension')
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
+    parser.add_argument('--knn', default=3, type=int, help='Number of neighbors for knn scoring')
     parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
     parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize')
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
@@ -331,6 +320,6 @@ if __name__ == '__main__':
     print(f'Loading data from {args.data_path}...', flush=True)
     counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
 
-    ctx = Context(device, run_dir, run_name, run_type=args.task)
+    ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn)
     main(args, counts)
     

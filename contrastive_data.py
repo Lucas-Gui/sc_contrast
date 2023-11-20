@@ -6,6 +6,8 @@ from typing import *
 
 class _DfDataset(Dataset):
     def __init__(self, df:pd.DataFrame, device) -> None:
+        '''
+        Yield ((n examples), (n labels) pairs)'''
         super().__init__()
         variants = df['variant']
         self.cats = variants.cat.categories
@@ -19,8 +21,8 @@ class _DfDataset(Dataset):
     def __len__(self):
         return len(self.y)
     
-    # def __getitem__(self, index) -> Tuple[Tuple[Tensor], Tensor]:
-    #     raise NotImplementedError
+    def __getitem__(self, index) -> Tuple[Tuple[Tensor, ...], Tuple[Tensor, ...]]: # return a pair (*x, *y) of tensor n-uplets, with the same n
+        raise NotImplementedError
 
 class BatchClassDataset(_DfDataset):
     """
@@ -40,15 +42,13 @@ class SiameseDataset(_DfDataset):
         y1 = self.y[index]
         if torch.rand((1,)).item() < self.p: # randomly get same class or different class
             # same class case : positive pair
-            i = self.y[self.y == y1].sample(1).index.item()
-            y = True
+            y_subset = self.y[self.y == y1]
         else:
-            i = self.y[self.y != y1].sample(1).index.item()
-            y = False
-
+            y_subset = self.y[self.y != y1]
+        i = torch.randint(0, y_subset.size(0), (1,)).item()
         x2 = self.x[i]
-        y = torch.tensor(y)
-        return (x1,x2), y #,i
+        y2 = self.y[i]
+        return (x1,x2), (y1, y2) #,i
     
 class ClassifierDataset(_DfDataset):
     '''
@@ -58,10 +58,10 @@ class ClassifierDataset(_DfDataset):
         super().__init__(df, device=device)
 
     def __getitem__(self, index) -> Any:
-        return (self.x[index],), self.y[index] # TODO : check that self.y is actually a Tensor
+        return (self.x[index],), (self.y[index],) 
     
 
-class BipartiteDataset(Dataset):
+class BipartiteDataset(Dataset): #TODO : conform to superclass return scheme for compatibility
     '''
     A dataset that takes two dataframes as data.
     Iterates over df1, and samples a second random example, either from df1, in the same class as x1 (with probability p1) or df2
@@ -107,9 +107,6 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
         if len(df) == 0:
             dls.append(None)
             continue
-        if i == 0:
-            ds = dataset_class(df, p=pos_frac)
-        else :
-            ds = SiameseDataset(df, p=0.5)
+        ds = dataset_class(df, p=pos_frac  if i ==0 else 0.5) # use half/half +/- pairs for eval (only for relevant dataloaders)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
     return dls

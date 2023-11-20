@@ -1,6 +1,9 @@
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import KNeighborsClassifier, sort_graph_by_row_values
+from scipy.sparse import csr_matrix
 from torch import Tensor
 import torch
+from models import Model
+import numpy as np
 
 
 
@@ -23,18 +26,42 @@ def ROC_score(y:Tensor, d:Tensor, eps = 1e-2):
     roc = 1/2 * ((fpr[1:] - fpr[:-1])*(tpr[1:] + tpr[:-1])).sum() 
     return roc, tpr, fpr
 
-def knn_class_score(model:torch.nn.Module, x_train:Tensor, x_test:Tensor, y_train, y_test, k=1, device='cpu'):
-    '''subset accuracy of labeling using the nearest projected neighbor'''
+def knn_ref_score(model:Model, x_train:Tensor, x_test:Tensor, y_train, y_test, k=3, device='cpu'):
+    '''
+    Compute subset accuracy of knn classification, using x_train embeddings as the reference and x_test as the example to classify
+    '''
     model.eval()
     model = model.to(device)
     x_train = x_train.to(device)
     x_test = x_test.to(device)
     with torch.no_grad():
-        emb_train = model.forward(x_train).cpu()
-        emb_test = model.forward(x_test).cpu()
+        emb_train = model.embed(x_train).cpu()
+        emb_test = model.embed(x_test).cpu()
     knn = KNeighborsClassifier(k)
     knn.fit(emb_train, y_train)
     return knn.score(emb_test, y_test)
+
+@torch.no_grad
+def knn_self_score(embed:Tensor, labels:Tensor,k=3):
+    '''
+    Compute subset accuracy of knn classification, using x_j (j != i) to classify each x_i
+    To avoid recomputing k-NNs with each i removed, precompute the euclidian distance matrix,
+      and then use it as a query with a sparse matrix to exclude x_i from the prediction of y_i
+    '''
+    knn = KNeighborsClassifier(metric='precomputed',n_neighbors=k)
+    D  = torch.cdist(embed, embed, p=2).cpu().numpy() # distance matrix
+    labels = labels.cpu().numpy()
+    knn.fit(D, labels)
+    # assert (D.diagonal() == 0).all() #TODO remove when confident 
+    np.fill_diagonal(D, 0)
+    query = csr_matrix(D)
+    sort_graph_by_row_values(query, warn_when_not_sorted=False)
+    assert query.nnz == D.shape[0]*(D.shape[1]-1)#check that the diagonal is zero TODO remove when confident 
+
+    return knn.score(query, labels)
+
+
+    
 
 
 
