@@ -1,5 +1,7 @@
-from sklearn.neighbors import KNeighborsClassifier, sort_graph_by_row_values
-from scipy.sparse import csr_matrix
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsTransformer, sort_graph_by_row_values
+from sklearn.metrics import accuracy_score
+from scipy.sparse import csr_matrix, find
+from scipy.stats import mode
 from torch import Tensor
 import torch
 from models import Model
@@ -45,20 +47,15 @@ def knn_ref_score(model:Model, x_train:Tensor, x_test:Tensor, y_train, y_test, k
 def knn_self_score(embed:Tensor, labels:Tensor,k=3):
     '''
     Compute subset accuracy of knn classification, using x_j (j != i) to classify each x_i
-    To avoid recomputing k-NNs with each i removed, precompute the euclidian distance matrix,
-      and then use it as a query with a sparse matrix to exclude x_i from the prediction of y_i
     '''
-    knn = KNeighborsClassifier(metric='precomputed',n_neighbors=k)
-    D  = torch.cdist(embed, embed, p=2).cpu().numpy() # distance matrix
+    knn = KNeighborsTransformer(n_neighbors=k)
     labels = labels.cpu().numpy()
-    knn.fit(D, labels)
-    # assert (D.diagonal() == 0).all() #TODO remove when confident 
-    np.fill_diagonal(D, 0)
-    query = csr_matrix(D)
-    sort_graph_by_row_values(query, warn_when_not_sorted=False)
-    assert query.nnz == D.shape[0]*(D.shape[1]-1)#check that the diagonal is zero TODO remove when confident 
-
-    return knn.score(query, labels)
+    knn.fit(embed.cpu(), )
+    graph = knn.kneighbors_graph()
+    labels_pred = labels[find(graph)[1]] # neighbors' labels (find(graph)[1] are the target nodes in the knn graph)
+    labels_pred = labels_pred.reshape((-1, k)) # (kN, ) -> (N, k)
+    labels_pred = mode(labels_pred.T).mode
+    return accuracy_score(labels, labels_pred)
 
 
     

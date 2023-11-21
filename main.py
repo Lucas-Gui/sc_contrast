@@ -76,13 +76,19 @@ def get_paths(data_dir:str):
         paths.extend(l)
     return paths
 
-def load_split(index_dir, counts) -> List[pd.DataFrame]:
+def load_split(index_dir, counts:pd.DataFrame) -> List[pd.DataFrame]:
         i = 0
         dataframes = []
+        cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
+        counts['variant'] = counts.variant.cat.reorder_categories(cat)
         while os.path.isfile(join(index_dir, f'index_{i}.csv')):
             idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
             dataframes.append(counts.loc[idx])
             i+=1
+        
+        print(f"{dataframes[0].variant.nunique()} variants in train")
+        print(f"{dataframes[2].variant.nunique()} variants in unseen")
+
         return dataframes
 
 def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_tag:str, i):
@@ -197,6 +203,7 @@ def main(args, counts, unseen_frac = 0.25):
     meta_file = join(run_dir, 'meta.json')
 
     config = config_dict[args.task]
+     
     if args.restart : #load model and split
         dataframes = load_split(index_dir, counts)
         print(f'Loading model from {model_file}')
@@ -204,12 +211,17 @@ def main(args, counts, unseen_frac = 0.25):
         with open(meta_file, 'r') as file:
             run_meta = json.load(file) # data that we want to keep between restarts
     else:
-        dataframes = split(counts, x_var=unseen_frac) #random split
+        if args.load_split is not None:
+            print(f'Copying split from {args.load_split}')
+            dataframes = load_split(join('models',args.load_split,'split'), counts)
+        else:
+            dataframes = split(counts, x_var=unseen_frac) #random split
         # save split
         make_dir_if_needed(index_dir)
         for i, df in enumerate(dataframes):
             df = pd.DataFrame(index=df.index).reset_index()
             df.to_csv(join(index_dir,f'index_{i}.csv'))
+        pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(index_dir, 'categories.csv')) #save category order
         in_shape = dataframes[0].shape[1]-2
         model = config.model_class(
                 MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
@@ -252,6 +264,7 @@ if __name__ == '__main__':
     parser.add_argument('run_name',)
 
     parser.add_argument('--restart', action='store_true')
+    parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
 
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
@@ -274,8 +287,9 @@ if __name__ == '__main__':
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
     parser.add_argument('--knn', default=3, type=int, help='Number of neighbors for knn scoring')
     parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
-    parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize')
+    parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='siamese')
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
+    parser.add_argument('--cpu', help='Run on cpu even if gpu is available', action='store_true')
     
     args = parser.parse_args()
 
@@ -296,6 +310,8 @@ if __name__ == '__main__':
         for arg in ['shape','embed_dim']:
             if sources['command_line'].get(arg) is not None:
                 warn(f'Warning : restart : {arg} will be ignored', )
+        if args.load_split is not None:
+            warn('Argument load_split will be ignored in favor of split saved for this model previous instance')
     if ~ args.no_norm_embeds and args.alpha :
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
     if args.task == 'classifier' and args.alpha :
@@ -314,7 +330,7 @@ if __name__ == '__main__':
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     print()
-    device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+    device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
