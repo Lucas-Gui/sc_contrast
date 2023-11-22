@@ -44,10 +44,10 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     counts = counts.merge(v2c, how='left', left_index=True, right_on='cell').dropna(axis=0).set_index('cell')
     counts = counts[counts.variant != 'unassigned']
     if group_wt_like:
-        print('\t\tGrouping synonymous variants.')
+        print('\t\tGrouping control variants.')
         filt = (counts['variant'].str[0] == counts['variant'].str[-1])  | (counts.variant == 'WT')
-        print(f"\t\tCasting {counts[filt].variant.nunique()} variants to 'synonymous' ")
-        counts.loc[filt, 'variant']= 'synonymous'
+        print(f"\t\tCasting {counts[filt].variant.nunique()} variants to 'control' ")
+        counts.loc[filt, 'variant']= 'control'
     print(f"\t\t{len(counts['variant'].unique())} variant classes")
     counts['variant'] = counts['variant'].astype('category')
     return counts
@@ -56,13 +56,13 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     '''
     First remove a x_var fraction of variants a unseen-class test set, 
     and then a x_cell fraction as a seen-class test set.
-    Keep 'synonymous' variant in training set.
+    Keep 'control' variant in training set.
     '''
-    variants = data.loc[data.variant != 'synonymous', 'variant'].unique() 
+    variants = data.loc[data.variant != 'control', 'variant'].unique() 
     # reorder categories such that codes 0 ... m-1 are in seen and m ... n-1 in unseen
     variants = np.random.permutation(variants)
-    if 'synonymous' in data.variant.cat.categories:
-        variants = np.concatenate((np.array(['synonymous']), variants))
+    if 'control' in data.variant.cat.categories:
+        variants = np.concatenate((np.array(['control']), variants))
     test_vars = variants[-int(len(variants)*x_var):]
     data['variant'] = data.variant.cat.reorder_categories(variants)
 

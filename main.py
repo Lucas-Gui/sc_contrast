@@ -141,7 +141,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 def core_loop(data:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, 
-              optimizer:torch.optim.Optimizer, mode:Literal['train','test'],
+              optimizer:torch.optim.Optimizer=None, mode:Literal['train','test']='test',
               unseen=False)-> Tensor:
     if mode == 'train':
         model.train()
@@ -275,7 +275,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--lr',type=float, default=1e-3, )
-    parser.add_argument('-n','--n-epochs', metavar='N', default=10_000, type=int, help='Number of epochs to run')
+    parser.add_argument('-n','--n-epochs', metavar='N', default=400, type=int, help='Number of epochs to run')
     parser.add_argument('--split-wt-like',action='store_true', 
                         help='If not passed, group all WT-like variants in the same class')
     parser.add_argument('--no-norm-embeds',action='store_true',
@@ -283,7 +283,7 @@ if __name__ == '__main__':
     
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
-    parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension')
+    parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
     parser.add_argument('--knn', default=3, type=int, help='Number of neighbors for knn scoring')
     parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
