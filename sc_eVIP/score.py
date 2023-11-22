@@ -1,4 +1,5 @@
-## code reproduced from https://github.com/klarman-cell-observatory/sc_eVIP/
+## code reproduced from https://github.com/klarman-cell-observatory/sc_eVIP/, 
+## with minor edits to bring it up to date
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,7 +10,7 @@ import os
 
 def get_conf_interval(data,ci_size=0.95):
     from scipy.stats import t, sem
-    ci1,ci2=t.interval(alpha=ci_size, df=len(data)-1, 
+    ci1,ci2=t.interval(confidence=ci_size, df=len(data)-1, 
                loc=np.mean(data), scale=sem(data)) 
     return(ci1,ci2)
 
