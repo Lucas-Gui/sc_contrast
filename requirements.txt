@@ -1,9 +1,0 @@
-python=3.10
-pytorch # you might want to install it separately first to get a version compatible with your gpu
-seaborn
-pandas[performance] 
-scikit-learn
-tqdm
-tensorboard
-jupyter
-configargparse
