@@ -76,11 +76,19 @@ def get_paths(data_dir:str):
         paths.extend(l)
     return paths
 
-def load_split(index_dir, counts:pd.DataFrame) -> List[pd.DataFrame]:
+def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True) -> List[pd.DataFrame]:
+        '''
+        If reorder_categories, use saved category order. This is important for classifier models,
+        as category order defines the label.
+        Set it to false if the categories are not the same as during training ("control" split into individual variants, for example)
+        '''
         i = 0
         dataframes = []
-        cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
-        counts['variant'] = counts.variant.cat.reorder_categories(cat)
+        if reorder_categories:
+            cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
+            counts['variant'] = counts.variant.cat.reorder_categories(cat)
+        else:
+            warn('Not reordering categories will lead to wrong classifier prediction')
         while os.path.isfile(join(index_dir, f'index_{i}.csv')):
             idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
             dataframes.append(counts.loc[idx])
@@ -276,7 +284,7 @@ if __name__ == '__main__':
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--lr',type=float, default=1e-3, )
     parser.add_argument('-n','--n-epochs', metavar='N', default=400, type=int, help='Number of epochs to run')
-    parser.add_argument('--split-wt-like',action='store_true', 
+    parser.add_argument('--split-synon',action='store_true', 
                         help='If not passed, group all WT-like variants in the same class')
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If not passed, rescale emebeddings to unit norm')
@@ -334,7 +342,7 @@ if __name__ == '__main__':
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= not args.split_wt_like,)
+    counts = load_data(*paths, group_wt_like= not args.split_synon,)
 
     ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn)
     main(args, counts)
