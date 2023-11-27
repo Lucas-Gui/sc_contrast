@@ -58,13 +58,14 @@ class LeCunContrastiveLoss(ContrastiveLoss):
     $L = (Y)\\frac{2}{Q} ||e_1 - e_2||_1^2 + (1-Y) 2Q\exp{-\\frac{2.77}{Q}||e_1 - e_2||_1}$
     '''
 
-    def forward(self, e1: Tensor, e2: Tensor, y : Tensor):
+    def forward(self, e1: Tensor, e2: Tensor, y1 : Tensor,  y2 : Tensor):
         """
         Compute the siamese loss.
         args:
             e1, e2 (Tensors): embeddings
             y1, y2 (any) : labels    
         """
+        y = y1 == y2
         loss = 0
         loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
         d = torch.norm((e1-e2), p=1, dim=-1)

@@ -10,6 +10,7 @@ from configargparse import ArgumentParser
 import torch 
 from torch import Tensor
 import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 import os
 from os.path import join
@@ -111,14 +112,12 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
 
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
-                 loss_fn, n_epoch=10_000, 
-                 lr=1e-3, weight_decay=0.001,
+                loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler,
+                n_epoch=10_000, 
                  ):
     i_0 = run_meta['i']
     stop_score = f'{ctx.k_nn}_nn_ref'
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     print(optimizer)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=40)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
     best_score = - np.inf
@@ -135,7 +134,10 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
             torch.save(model, join(run_dir, 'best_model.pkl'))
             with open(join(run_dir, 'best_score.json'), 'w') as file:
                 json.dump({'i':i, f'{stop_score}_seen':best_score}, file, sort_keys=True, indent=2)
-        scheduler.step(metrics_seen[f'{ctx.k_nn}_nn_ref'])
+        if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(metrics_seen[f'{ctx.k_nn}_nn_ref'])
+        elif isinstance(scheduler, optim.lr_scheduler.CosineAnnealingWarmRestarts):
+            scheduler.step(i)
 
         if test_unseen is not None:
             metrics_unseen = core_loop(test_unseen, model, loss_fn, optimizer=None, mode='test', unseen=True)
@@ -251,10 +253,19 @@ def main(args, counts, unseen_frac = 0.25):
 
     print(model)
     loss_fn = config.loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.scheduler == 'plateau':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=args.patience)
+    elif args.scheduler == 'restarts':
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=args.cosine_t, 
+        )
+    else :
+        raise ValueError('Please specify a valid scheduler')
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
-                loss_fn, 
-                lr=args.lr, n_epoch=args.n_epochs,
-                weight_decay=args.weight_decay
+                loss_fn, optimizer=optimizer, scheduler=scheduler, 
+                n_epoch=args.n_epochs,
                 )
     
 def test(args):
@@ -283,13 +294,19 @@ if __name__ == '__main__':
     parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
-    parser.add_argument('--lr',type=float, default=1e-3, )
     parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--split-synon',action='store_true', 
                         help='If not passed, group all WT-like variants in the same class')
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If not passed, rescale emebeddings to unit norm')
-    
+    # scheduler lr args
+    sched_args = parser.add_argument_group('Learning rate scheduler arguments')
+    sched_args.add_argument('--lr',type=float, default=1e-3, )
+    sched_args.add_argument('--scheduler', choices=['plateau','restarts'], default='plateau',
+                            help="plateau : reduce lr on plateau\nrestarts : cosine annealaing with warm restarts")
+    sched_args.add_argument('--patience',type=int,help='Patience for reduce lr on plateau', default=40)
+    sched_args.add_argument('--cosine-t',type=int,help='Period for cosine annealing', default=100)
+
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
