@@ -53,6 +53,23 @@ class ClassifierLoss(ContrastiveLoss):
     def forward(self, ypred, y) -> Tensor:
         return f.cross_entropy(ypred, y, reduction='mean')
     
+
+class DoubleClassifierLoss(ContrastiveLoss):
+    '''
+    Cross entropy on double classification task
+    '''
+    def __init__(self, margin, alpha) -> None:
+        super().__init__(margin, alpha)
+        assert 0<= self.alpha<=1
+
+    def __repr__(self) -> str:
+        return super().__repr__()+ f"\nalpha : {self.alpha}" 
+
+    def forward(self, ypred_1, ypred_2, y1, y2) -> Tensor:
+        l1 =  f.cross_entropy(ypred_1, y1, reduction='mean')
+        l2 =  f.cross_entropy(ypred_2, y2, reduction='mean')
+        return self.alpha *l1 + (1-self.alpha)*l2
+    
 class LeCunContrastiveLoss(ContrastiveLoss):
     '''
     $L = (Y)\\frac{2}{Q} ||e_1 - e_2||_1^2 + (1-Y) 2Q\exp{-\\frac{2.77}{Q}||e_1 - e_2||_1}$
@@ -173,6 +190,28 @@ class Classifier(Model):
         x = self.embed(x)
         logits = self.output_layer(f.relu(x))
         return (logits,), x
+    
+
+class CycleClassifier(Model):
+    '''
+    A model that learns embeddings through a double classification task : cell cycle and variant.
+    args :
+        network : inner module of the network. Must be correctly initialised. 
+    '''
+    def __init__(self, network, n_class, **kwargs) -> None:
+        super().__init__(network, **kwargs)
+        self.output_layer_1 = nn.Linear(network.output_shape, n_class)
+        self.output_layer_2 = nn.Linear(network.output_shape, 6)
+
+    def forward(self, x: Tensor, ):
+        """
+        args:
+            x: Input tensor
+        """
+        x = self.embed(x)
+        logits_1 = self.output_layer_1(f.relu(x))
+        logits_2 = self.output_layer_2(f.relu(x))
+        return (logits_1, logits_2), x
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 

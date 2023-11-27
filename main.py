@@ -168,19 +168,11 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss,
     norm_l = []
     embeds = [] # store embeds for scoring
     labels = [] # store labels for scoring
-    print(mode)
     with torch.no_grad() if mode=='test' else nullcontext(): # disable grad only in test mode
         for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, ):
             x = [x_i.to(ctx.device) for x_i in x]
             y = [y_i.to(ctx.device) for y_i in y]
             outputs, emb = model.forward(*x)
-            y1, y2 = outputs
-            print(y1.shape)
-            print(y2.shape)
-            yt1, yt2 = y
-            print(yt1)
-            print(yt2)
-
             if not unseen  or ctx.task not in ['classifier','cycle-classifier']: #avoid trying to classfify unseen classes
                 loss:Tensor = loss_fn.forward(*outputs, *y)
                 loss_l.append(loss)
@@ -350,9 +342,9 @@ if __name__ == '__main__':
                 warn(f'Warning : restart : {arg} will be ignored', )
         if args.load_split is not None:
             warn('Argument load_split will be ignored in favor of split saved for this model previous instance')
-    if not args.no_norm_embeds and args.alpha :
+    if (not args.no_norm_embeds and args.alpha ) or args.task == 'cycle-classifier':
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
-    if args.task in ['classifier','cycle-classifier'] and args.alpha :
+    if args.task in ['classifier'] and args.alpha : # for cycle classifier, alpha is the cycle/variant weight
         raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
     
     # safety overwriting check
