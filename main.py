@@ -39,7 +39,8 @@ class _Config():
 
 config_dict:Dict[str, _Config] = {
     'siamese':_Config(loss_dict, Siamese, SiameseDataset),
-    'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset)
+    'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset),
+    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchClassDataset)
 
 }
 
@@ -117,7 +118,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
     stop_score = f'{ctx.k_nn}_nn_ref'
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     print(optimizer)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=40)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0)
     writer = SummaryWriter(join('runs',run_name))
     best_score = - np.inf
@@ -283,7 +284,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--lr',type=float, default=1e-3, )
-    parser.add_argument('-n','--n-epochs', metavar='N', default=400, type=int, help='Number of epochs to run')
+    parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--split-synon',action='store_true', 
                         help='If not passed, group all WT-like variants in the same class')
     parser.add_argument('--no-norm-embeds',action='store_true',

@@ -26,7 +26,25 @@ class _DfDataset(Dataset):
 
 class BatchClassDataset(_DfDataset):
     """
-    Load"""
+    Load data for batch contrastive loss (Khosla et al, )
+    Because we don't do data augmentation, instead we randomly sample pairs of cells from the same classes.
+    Yields (x1, x2) , (y,) tensors, where x1 and x2 have the same label y
+    """
+
+    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu') -> None:
+        '''
+        p : probability to choose a positive pair at each pair sampling
+        '''
+        super().__init__(df, device=device)
+        self.p = p
+    
+    def __getitem__(self, index) -> Any:
+        x1 = self.x[index]
+        y = self.y[index]
+        y_subset = self.y[self.y == y]
+        i = torch.randint(0, y_subset.size(0), (1,)).item()
+        x2 = self.x[i]
+        return (x1,x2), (y,) 
     
 class SiameseDataset(_DfDataset):
 

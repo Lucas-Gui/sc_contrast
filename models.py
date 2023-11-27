@@ -77,11 +77,13 @@ class BatchContrastiveLoss(ContrastiveLoss):
     See Khosla et al, 2020
     '''
 
-    def forward(self, embeddings:Tensor, y:pd.Series) -> Tensor:
-        cross = pd.merge(y,y, how='cross') # cross product
-        cross['positive'] = (cross['variant_x'] == cross['variant_y'])
-        positive = cross.pivot(index='variant_x',columns='variant_y',values='positive').to_numpy()
-        positive = torch.tensor(positive, device=embeddings.device) # positive[i,j] = (y_i == y_j)
+    def forward(self, e1:Tensor, e2:Tensor, y:Tensor) -> Tensor:
+        '''
+        Input : e1, e2, embeddings of exemples with labels y
+        '''
+        y = torch.concat((y,y))
+        embeddings = torch.concat((e1, e2))
+        positive = y[None, :].eq(y[:, None]) # positive[i,j] := y_i == y_j
 
         Z = embeddings @ embeddings.T / self.margin 
         Z = Z.exp() # Z(i,j) = exp( z_i . z_j /\tau)
@@ -100,7 +102,7 @@ class Model(Module):
     '''
     A network that can produce embeddings
     '''
-    def __init__(self, network : nn.Module, normalize=True) -> None:
+    def __init__(self, network : nn.Module, normalize=True, **kwargs) -> None: #captures **kwargs to pass paramters that are specific to some model types
         super().__init__()
         self.network = network
         self.normalize = normalize
@@ -120,8 +122,6 @@ class Siamese(Model):
     args :
         network : inner module of the network. Must be correctly initialised. 
     '''
-    def __init__(self, network, **kwargs) -> None:
-        super().__init__(network)
 
     def forward(self, x1: Tensor, x2:Tensor, ):
         """
@@ -140,7 +140,7 @@ class Classifier(Model):
         network : inner module of the network. Must be correctly initialised. 
     '''
     def __init__(self, network, n_class, **kwargs) -> None:
-        super().__init__(network)
+        super().__init__(network, **kwargs)
         self.output_layer = nn.Linear(network.output_shape, n_class)
 
     def forward(self, x: Tensor, ):
@@ -171,6 +171,3 @@ class MLP(Module):
         x = self.layers.forward(x)
 
         return x
-
-
-
