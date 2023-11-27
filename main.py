@@ -238,7 +238,7 @@ def main(args, counts, unseen_frac = 0.25):
         model = config.model_class(
                 MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim,),
-            normalize=~ args.no_norm_embeds,
+            normalize= not args.no_norm_embeds,
             #task-specific kwargs
             n_class = dataframes[0]['variant'].nunique() # should be equal to nb of codes 
                             ).to(ctx.device)
@@ -299,7 +299,7 @@ if __name__ == '__main__':
     parser.add_argument('--split-synon',action='store_true', 
                         help='If not passed, group all WT-like variants in the same class')
     parser.add_argument('--no-norm-embeds',action='store_true',
-                        help='If not passed, rescale emebeddings to unit norm')
+                        help='If passed, do not rescale emebeddings to unit norm')
     # scheduler lr args
     sched_args = parser.add_argument_group('Learning rate scheduler arguments')
     sched_args.add_argument('--lr',type=float, default=1e-3, )
@@ -339,7 +339,7 @@ if __name__ == '__main__':
                 warn(f'Warning : restart : {arg} will be ignored', )
         if args.load_split is not None:
             warn('Argument load_split will be ignored in favor of split saved for this model previous instance')
-    if ~ args.no_norm_embeds and args.alpha :
+    if not args.no_norm_embeds and args.alpha :
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
     if args.task == 'classifier' and args.alpha :
         raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
