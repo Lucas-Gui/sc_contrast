@@ -72,6 +72,27 @@ class LeCunContrastiveLoss(ContrastiveLoss):
         loss = loss + y* d**2 *2/self.margin + (~y)* 2*self.margin*torch.exp(-2.77/self.margin*d)
         return loss.mean()
     
+class CosineContrastiveLoss(ContrastiveLoss):
+    '''
+    $L = Y\\ \\d(e_1, e_2) + (1-Y) (1 - d(e_1, e_2))$
+    '''
+
+    def forward(self, e1: Tensor, e2: Tensor, y1 : Tensor,  y2 : Tensor):
+        """
+        Compute the siamese loss.
+        args:
+            e1, e2 (Tensors): embeddings
+            y1, y2 (any) : labels    
+        """
+        y = y1 == y2
+        e1 = e1/e1.norm(p=2, dim=-1, keepdim=True)
+        e2 = e2/e2.norm(p=2, dim=-1, keepdim=True)
+        loss = 0
+        loss = loss + self.alpha * (torch.norm(e1, dim=-1) + torch.norm(e2, dim=-1))/2
+        d = 1 - (e1 * e2).sum(dim=-1)
+        loss = loss + y* d + (~y)* (1-d)
+        return loss.mean()
+    
 
 class BatchContrastiveLoss(ContrastiveLoss):
     '''

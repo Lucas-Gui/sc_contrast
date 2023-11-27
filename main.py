@@ -29,7 +29,8 @@ from contextlib import nullcontext
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
     'standard':SiameseLoss,
-    'lecun':LeCunContrastiveLoss
+    'lecun':LeCunContrastiveLoss,
+    'cosine': CosineContrastiveLoss
 }
 
 @dataclass
