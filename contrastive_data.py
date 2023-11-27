@@ -14,8 +14,12 @@ class _DfDataset(Dataset):
         self.y = torch.tensor(
             variants.cat.codes.to_numpy(), dtype=int, device=device
         )
+        self.cycle_cats = df['cycle'].cat.categories
+        self.cycle = torch.tensor(
+            df['cycle'].cat.codes.to_numpy(), dtype=int, device=device
+        )
         self.x = torch.tensor(
-                df.drop(columns=['variant','Variant functional class']).to_numpy(), 
+                df.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
             dtype=torch.float32, device=device)
     
     def __len__(self):
@@ -113,6 +117,14 @@ class BipartiteDataset(Dataset): #TODO : conform to superclass return scheme for
 
         y = torch.tensor(y1==y2.item())
         return (x1,x2), y #,i
+    
+class CycleClassifierDataset(_DfDataset):
+    '''Return two labels, variant and cell cycle'''
+    def __init__(self, df: pd.DataFrame, p=None, device='cpu') -> None:
+        super().__init__(df, device=device)
+
+    def __getitem__(self, index) -> Any:
+        return (self.x[index],), (self.y[index], self.cycle[index]) 
 
 def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8, pos_frac=0.5, device='cpu') -> Tuple[DataLoader]:
     '''

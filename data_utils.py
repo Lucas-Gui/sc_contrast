@@ -5,7 +5,7 @@ import numpy as np
 
 
 def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
-              group_wt_like=False)-> pd.DataFrame:
+              cell_meta_path, group_wt_like=False)-> pd.DataFrame:
     '''
     *_path : paths to gzipped mtx or csv files
     except variant_path, which refers to an unzipped csv file
@@ -25,7 +25,10 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     with gzip.open(v2c_path) as file: # read cell tags
         v2c = pd.read_csv(file, sep='\t', usecols=['cell','variant'])
     variant_data = pd.read_csv(variant_path, index_col=0)
-
+    # read cell metadata (for cell cycle)
+    with gzip.open(cell_meta_path) as file: # read gene names
+        cell_meta = pd.read_csv(file, index_col=-1  )
+    cycle = cell_meta['phase.multi'].replace('G0', 'Uncycling')
     print('\tMerging and processing...' ,flush=True)
     #pivot 
     counts['gene_name'] = genes.loc[counts.gene].reset_index(drop=True)
@@ -33,6 +36,7 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     # counts = counts.drop(columns=['cell','gene']) #unnecessary : included in pivot
     counts = counts.pivot(index='cell_name',columns='gene_name',values='reads')
     counts = counts.fillna(0) # pivot will create NA where the .mtx file was sparse
+    counts['cycle'] = cycle.astype('category')
     # read variant impact class
     variant_data = variant_data['Variant functional class']
     variant_data = variant_data.replace({'Impactful IV (gain-of-function)':'Impactful IV'})

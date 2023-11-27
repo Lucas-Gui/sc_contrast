@@ -42,7 +42,10 @@ class _Config():
 config_dict:Dict[str, _Config] = {
     'siamese':_Config(loss_dict, Siamese, SiameseDataset),
     'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset),
-    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchClassDataset)
+    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchClassDataset),
+    'cycle-classifier': _Config(
+        {'standard':DoubleClassifierLoss}, CycleClassifier, CycleClassifierDataset
+        )
 
 }
 
@@ -73,7 +76,7 @@ def get_paths(data_dir:str):
     _r = '.processed'
     paths = []
     for p in [_r+'.matrix.mtx.gz',_r+'.genes.csv.gz',_r+'.cells.csv.gz', '.variants2cell.csv.gz', 
-              '.variants.csv']:
+              '.variants.csv', '.cells.metadata.csv.gz']:
         l = glob(join(data_dir, '*'+p))
         assert len(l)==1, f"There should be exaclty one match for {join(data_dir, '*'+p)}"
         paths.extend(l)
@@ -152,7 +155,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 
-def core_loop(data:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss, 
+def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, 
               optimizer:torch.optim.Optimizer=None, mode:Literal['train','test']='test',
               unseen=False)-> Tensor:
     if mode == 'train':
@@ -165,12 +168,20 @@ def core_loop(data:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss,
     norm_l = []
     embeds = [] # store embeds for scoring
     labels = [] # store labels for scoring
+    print(mode)
     with torch.no_grad() if mode=='test' else nullcontext(): # disable grad only in test mode
         for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, ):
             x = [x_i.to(ctx.device) for x_i in x]
             y = [y_i.to(ctx.device) for y_i in y]
             outputs, emb = model.forward(*x)
-            if not unseen  or ctx.task not in ['classifier']: #avoid trying to classfify unseen classes
+            y1, y2 = outputs
+            print(y1.shape)
+            print(y2.shape)
+            yt1, yt2 = y
+            print(yt1)
+            print(yt2)
+
+            if not unseen  or ctx.task not in ['classifier','cycle-classifier']: #avoid trying to classfify unseen classes
                 loss:Tensor = loss_fn.forward(*outputs, *y)
                 loss_l.append(loss)
             if mode == 'train':
@@ -191,7 +202,7 @@ def core_loop(data:DataLoader, model:nn.Module, loss_fn:ContrastiveLoss,
     metrics = {
         f'{ctx.k_nn}_nn_self' : knn_self_score(embeds, labels)
     }
-    if not unseen  or ctx.task not in ['classifier']: 
+    if not unseen  or ctx.task not in ['classifier', 'cycle-classifier']: 
         metrics['loss'] = np.mean( [t.detach().cpu().item() for t in loss_l])
     if mode == 'train':
         metrics['lr'] = optimizer.param_groups[0]['lr']
@@ -234,7 +245,7 @@ def main(args, counts, unseen_frac = 0.25):
             df = pd.DataFrame(index=df.index).reset_index()
             df.to_csv(join(index_dir,f'index_{i}.csv'))
         pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(index_dir, 'categories.csv')) #save category order
-        in_shape = dataframes[0].shape[1]-2
+        in_shape = dataframes[0].shape[1]-3
         model = config.model_class(
                 MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim,),
@@ -341,7 +352,7 @@ if __name__ == '__main__':
             warn('Argument load_split will be ignored in favor of split saved for this model previous instance')
     if not args.no_norm_embeds and args.alpha :
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
-    if args.task == 'classifier' and args.alpha :
+    if args.task in ['classifier','cycle-classifier'] and args.alpha :
         raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
     
     # safety overwriting check
