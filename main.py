@@ -24,6 +24,8 @@ from warnings import warn
 from dataclasses import dataclass
 from contextlib import nullcontext
 
+import pprint
+
 
 # config 
 
@@ -334,9 +336,19 @@ if __name__ == '__main__':
         print('Test concluded.')
         sys.exit()
 
+    sources = parser._source_to_settings
+    # ignore some arguments if they come from a file
+    # iiuc, configargparse will store key in _source_to_setting.config ONLY if it not superseded by a CL arg
+    for arg in ['restart']:
+        for key  in sources.keys():
+            if key.startswith('config_file'):
+                if sources[key].get(arg) is not None :
+                    value = sources[key][arg][0].default
+                    print(f'Ignoring argument {arg} with value {args.__dict__[arg]} from {key}, setting to default value {value}')
+                    args.__dict__[arg] = value
+
     # argument compatibility check
     if args.restart:
-        sources = parser._source_to_settings
         for arg in ['shape','embed_dim']:
             if sources['command_line'].get(arg) is not None:
                 warn(f'Warning : restart : {arg} will be ignored', )
