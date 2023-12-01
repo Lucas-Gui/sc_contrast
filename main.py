@@ -60,6 +60,7 @@ class Context():
     run_name:str = None
     task:str = None
     k_nn:int = 3
+    verbosity:int = 3
 
 ctx = Context() # in a jupyter notebook, assign the correct values to this instance
 
@@ -101,7 +102,7 @@ def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True) -> Lis
             idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
             dataframes.append(counts.loc[idx])
             i+=1
-        
+        print(', '.join([str(df.shape[0]) for df in dataframes]) + ' exemples in data')
         print(f"{dataframes[0].variant.nunique()} variants in train")
         print(f"{dataframes[2].variant.nunique()} variants in unseen")
 
@@ -118,14 +119,13 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
 
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
-                loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler,
+                loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler, writer:SummaryWriter,
                 n_epoch=10_000, 
                  ):
     i_0 = run_meta['i']
     stop_score = f'{ctx.k_nn}_nn_ref'
     print(optimizer)
-    bar = tqdm(range(i_0, i_0+n_epoch), position=0)
-    writer = SummaryWriter(join('runs',run_name))
+    bar = tqdm(range(i_0, i_0+n_epoch), position=0, disable= ctx.verbosity <=1)
     best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
@@ -171,7 +171,7 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss,
     embeds = [] # store embeds for scoring
     labels = [] # store labels for scoring
     with torch.no_grad() if mode=='test' else nullcontext(): # disable grad only in test mode
-        for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, ):
+        for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, disable= ctx.verbosity <=1):
             x = [x_i.to(ctx.device) for x_i in x]
             y = [y_i.to(ctx.device) for y_i in y]
             outputs, emb = model.forward(*x)
@@ -269,8 +269,11 @@ def main(args, counts, unseen_frac = 0.25):
         )
     else :
         raise ValueError('Please specify a valid scheduler')
+    
+    writer = SummaryWriter(join('runs',args.dest_name,run_name))
+
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
-                loss_fn, optimizer=optimizer, scheduler=scheduler, 
+                loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
                 n_epoch=args.n_epochs,
                 )
     
@@ -282,12 +285,15 @@ def test(args):
     counts = pd.read_csv('/home/lguirardel/data/perturb_comp/data/KRAS_test.csv', index_col=0)
 
     main(args, counts, unseen_frac=0)
-    
 
-if __name__ == '__main__':
+
+def make_parser():
     parser = ArgumentParser('''Train and evaluate a contrastive model on Ursu et al. data''')
     parser.add_argument('data_path', help='Path to data directory. ')
     parser.add_argument('run_name',)
+
+    parser.add_argument('--dest-name', default='', help='Optionally store model and runs results in subdir')
+    parser.add_argument('--verbose', default=2, help='Verbosity level. Set to 1 to silence tqdm output', type=int)
 
     parser.add_argument('--restart', action='store_true')
     parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
@@ -313,20 +319,24 @@ if __name__ == '__main__':
     sched_args.add_argument('--patience',type=int,help='Patience for reduce lr on plateau', default=40)
     sched_args.add_argument('--cosine-t',type=int,help='Period for cosine annealing', default=100)
 
-    parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
-    parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
-    parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
-    parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
-    parser.add_argument('--knn', default=3, type=int, help='Number of neighbors for knn scoring')
-    parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
     parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='siamese')
+    parser.add_argument('--knn', default=5, type=int, help='Number of neighbors for knn scoring')
+
+    parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
+    parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
+    parser.add_argument('--overwrite', action='store_true', help='Do not prompt for confirmation if model already exists')
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
     parser.add_argument('--cpu', help='Run on cpu even if gpu is available', action='store_true')
+    return parser
     
+
+if __name__ == '__main__':
+
+    parser = make_parser()
     args = parser.parse_args()
 
  
-    run_dir = join('models',args.run_name) if not args.run_test else join('models', '_test')
+    run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
     run_name = args.run_name if not args.run_test else 'TEST' 
 
 
@@ -367,6 +377,9 @@ if __name__ == '__main__':
             sys.exit()
         else:
             print('Proceeding.')
+    if args.dest_name:
+        make_dir_if_needed(join('models', args.dest_name))
+        make_dir_if_needed(join('runs', args.dest_name))
     make_dir_if_needed(run_dir)
     # save args to file
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
