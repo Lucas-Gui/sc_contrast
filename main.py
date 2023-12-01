@@ -306,9 +306,12 @@ def make_parser():
     parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
+    parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
+    parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
+  
     parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
-    parser.add_argument('--split-synon',action='store_true', 
-                        help='If not passed, group all WT-like variants in the same class')
+    parser.add_argument('--group-synon',action='store_true', 
+                        help='If passed, group all synonymous variants in the same class')
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If passed, do not rescale emebeddings to unit norm')
     # scheduler lr args
@@ -389,8 +392,8 @@ if __name__ == '__main__':
     print(f'Using {device}.')
     paths = get_paths(args.data_path)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= not args.split_synon,)
+    counts = load_data(*paths, group_wt_like= args.group_synon,)
 
-    ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn)
+    ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn, verbosity=args.verbose)
     main(args, counts)
     
