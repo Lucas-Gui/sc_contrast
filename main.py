@@ -41,7 +41,7 @@ class _Config():
     model_class:Type[Model]
     dataset_class:Type[Dataset]
 
-config_dict:Dict[str, _Config] = {
+config_dict:Dict[str, _Config] = { # task -> config mapping
     'siamese':_Config(loss_dict, Siamese, SiameseDataset),
     'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset),
     'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchClassDataset),
@@ -367,9 +367,9 @@ if __name__ == '__main__':
                 warn(f'Warning : restart : {arg} will be ignored', )
         if args.load_split is not None:
             warn('Argument load_split will be ignored in favor of split saved for this model previous instance')
-    if (not args.no_norm_embeds and args.alpha ) or args.task == 'cycle-classifier':
+    if (not args.no_norm_embeds and args.alpha ) and not args.task == 'cycle-classifier': # for cycle classifier, alpha is the cycle/variant weight
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
-    if args.task in ['classifier'] and args.alpha : # for cycle classifier, alpha is the cycle/variant weight
+    if args.task in ['classifier'] and args.alpha : 
         raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
     
     # safety overwriting check
