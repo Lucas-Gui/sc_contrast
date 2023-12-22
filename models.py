@@ -175,6 +175,7 @@ class Siamese(Model):
 class Classifier(Model):
     '''
     A model that learns embeddings through a classification task.
+    Implements a logistic regression on top of the embedding
     args :
         network : inner module of the network. Must be correctly initialised. 
     '''
@@ -188,7 +189,7 @@ class Classifier(Model):
             x: Input tensor
         """
         x = self.embed(x)
-        logits = self.output_layer(f.relu(x))
+        logits = self.output_layer(x)
         return (logits,), x
     
 
@@ -212,6 +213,7 @@ class CycleClassifier(Model):
         logits_1 = self.output_layer_1(f.relu(x))
         logits_2 = self.output_layer_2(f.relu(x))
         return (logits_1, logits_2), x
+
     
 class MLP(Module):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
