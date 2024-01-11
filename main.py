@@ -44,11 +44,17 @@ class _Config():
 config_dict:Dict[str, _Config] = { # task -> config mapping
     'siamese':_Config(loss_dict, Siamese, SiameseDataset),
     'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset),
-    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchClassDataset),
+    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchDataset),
     'cycle-classifier': _Config(
         {'standard':DoubleClassifierLoss}, CycleClassifier, CycleClassifierDataset
         )
 
+}
+
+bag_dataset_dict = {
+    'siamese':None,
+    'classifier':ClassifierBagDataset,
+    'batch-supervised':BatchBagDataset,
 }
 
 # context -> to put all global variables in the same place
@@ -220,6 +226,11 @@ def main(args, counts, unseen_frac = 0.25):
     meta_file = join(run_dir, 'meta.json')
 
     config = config_dict[args.task]
+    if args.ensemble > 1:
+        try : 
+            config.dataset_class = bag_dataset_dict[args.task]
+        except KeyError:
+            raise NotImplementedError(f'Bagging is not implemented for task {args.task}')
      
     if args.restart : #load model and split
         dataframes = load_split(index_dir, counts)
@@ -324,6 +335,7 @@ def make_parser():
 
     parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='siamese')
     parser.add_argument('--knn', default=5, type=int, help='Number of neighbors for knn scoring')
+    parser.add_argument('--ensemble', default=1, type=int, help='Number of instances to use for Multiple Instance Learning')
 
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')

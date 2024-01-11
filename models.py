@@ -234,3 +234,24 @@ class MLP(Module):
         x = self.layers.forward(x)
 
         return x
+
+
+class AttentionMIL(Module):
+    '''Wrap around an inner network to perform attention pooling on the instances'''
+    def __init__(self, model:Module,inner_shape=64, ) -> None:
+        super().__init__()
+        self.model = model    
+        self.att1 = nn.Linear(model.output_shape, inner_shape)
+        self.att2 = nn.Linear(inner_shape, 1)
+        # self.output_shape = model.network.output_shape
+
+    def forward(self, x:Tensor) -> Tensor:
+        '''Shape : (batch_size, n_instances, input_shape)'''
+        x = self.model.forward(x)
+        a = f.tanh(self.att1(x))
+        a = self.att2(a)
+        a = a/a.sum(dim=1, keepdim=True)
+        x = (x*a).sum(dim=1) # weighted sum of instances
+        return x
+
+
