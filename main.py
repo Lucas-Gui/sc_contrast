@@ -139,7 +139,10 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         write_metrics(metrics_train, writer, 'train', i)
         
         metrics_seen =  core_loop(test_seen, model, loss_fn, optimizer=None, mode='test')
-        metrics_seen[f'{ctx.k_nn}_nn_ref'] = knn_ref_score(model, train.dataset.x,test_seen.dataset.x, train.dataset.y, test_seen.dataset.y, k=1, device=ctx.device)
+        metrics_seen[f'{ctx.k_nn}_nn_ref'] = knn_ref_score(
+            model, train.dataset.x[:,None,:], # add empty dimensions to x for compatibility with MIL models
+            test_seen.dataset.x[:,None,:],
+              train.dataset.y, test_seen.dataset.y, k=1, device=ctx.device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen[stop_score] > best_score:
             best_score = metrics_seen[stop_score]
@@ -168,8 +171,11 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss,
               unseen=False)-> Tensor:
     if mode == 'train':
         model.train()
+        print('train')
     elif mode == 'test':
         model.eval()
+        print('test')
+
     loss_l = []
     y_l = []
     d_l = []
@@ -226,7 +232,7 @@ def main(args, counts, unseen_frac = 0.25):
     meta_file = join(run_dir, 'meta.json')
 
     config = config_dict[args.task]
-    if args.ensemble > 1:
+    if args.instance > 1:
         try : 
             config.dataset_class = bag_dataset_dict[args.task]
         except KeyError:
@@ -251,13 +257,16 @@ def main(args, counts, unseen_frac = 0.25):
             df.to_csv(join(index_dir,f'index_{i}.csv'))
         pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(index_dir, 'categories.csv')) #save category order
         in_shape = dataframes[0].shape[1]-3
+        inner_network = MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
+                    output_shape=args.embed_dim,)
+        if args.instance > 1:
+            inner_network = AttentionMIL(inner_network, inner_shape=64)
         model = config.model_class(
-                MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
-                    output_shape=args.embed_dim,),
-            normalize= not args.no_norm_embeds,
+               inner_network, normalize= not args.no_norm_embeds,
             #task-specific kwargs
             n_class = dataframes[0]['variant'].nunique() # should be equal to nb of codes 
                             ).to(ctx.device)
+
         run_meta = {
             'i':0,
         }
@@ -335,7 +344,7 @@ def make_parser():
 
     parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='siamese')
     parser.add_argument('--knn', default=5, type=int, help='Number of neighbors for knn scoring')
-    parser.add_argument('--ensemble', default=1, type=int, help='Number of instances to use for Multiple Instance Learning')
+    parser.add_argument('--instance', default=1, type=int, help='Number of instances to use for Multiple Instance Learning')
 
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')

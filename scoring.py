@@ -37,8 +37,8 @@ def knn_ref_score(model:Model, x_train:Tensor, x_test:Tensor, y_train, y_test, k
     x_train = x_train.to(device)
     x_test = x_test.to(device)
     with torch.no_grad():
-        emb_train = model.embed(x_train).cpu()
-        emb_test = model.embed(x_test).cpu()
+        emb_train = model.embed(x_train).cpu().squeeze()
+        emb_test = model.embed(x_test).cpu().squeeze()
     knn = KNeighborsClassifier(k)
     knn.fit(emb_train, y_train)
     return knn.score(emb_test, y_test)

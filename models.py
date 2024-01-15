@@ -214,8 +214,16 @@ class CycleClassifier(Model):
         logits_2 = self.output_layer_2(f.relu(x))
         return (logits_1, logits_2), x
 
+class InnerNetwork(Module):
+    # abstract class for inner networks of a model
+    output_shape:int
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x:Tensor) -> Tensor:
+        raise NotImplementedError
     
-class MLP(Module):
+class MLP(InnerNetwork):
     def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
                  output_shape:int=20, act = nn.ELU(), dropout = None) -> None:
         super().__init__()
@@ -235,23 +243,68 @@ class MLP(Module):
 
         return x
 
-
-class AttentionMIL(Module):
+class AttentionMIL(InnerNetwork):
     '''Wrap around an inner network to perform attention pooling on the instances'''
-    def __init__(self, model:Module,inner_shape=64, ) -> None:
+    def __init__(self, model:InnerNetwork,inner_shape=64, ) -> None:
         super().__init__()
         self.model = model    
         self.att1 = nn.Linear(model.output_shape, inner_shape)
         self.att2 = nn.Linear(inner_shape, 1)
-        # self.output_shape = model.network.output_shape
+        self.output_shape = model.output_shape
 
-    def forward(self, x:Tensor) -> Tensor:
+    def forward(self, x:Tensor) -> Tensor: 
+        #TODO : embedding normalization should happen before attention
         '''Shape : (batch_size, n_instances, input_shape)'''
-        x = self.model.forward(x)
+        x = self.model(x)
         a = f.tanh(self.att1(x))
         a = self.att2(a)
-        a = a/a.sum(dim=1, keepdim=True)
+        a = f.softmax(a, dim=1)
         x = (x*a).sum(dim=1) # weighted sum of instances
         return x
 
+# class AttentionMIL(Module):
+#     '''Wrap around an model to perform attention pooling on the instances
+#     '''
+#     def __init__(self, model:Model, inner_shape=64, ) -> None:
+#         super().__init__()
+#         self.model = model    
+#         self.att1 = nn.Linear(model.network.output_shape, inner_shape)
+#         self.att2 = nn.Linear(inner_shape, 1)
+
+#     def embed(self, x:Tensor) -> Tensor: 
+#         '''Shape : (batch_size, n_instances, input_shape)'''
+#         x = self.model.embed(x)
+#         print(x.shape)
+#         a = f.tanh(self.att1(x))
+#         a = self.att2(a)
+#         a = f.softmax(a, dim=1)
+#         x = (x*a).sum(dim=1) # weighted sum of instances
+#         return x
+    
+#     def forward(self, x:Tensor) -> Tensor:
+#         return self.model.forward(x)
+    
+def mil_factory(model:Type[Model], inner_shape=64, ) -> Model:
+    '''
+    Make a Multiple Instance Learning model from a model class by
+    changing its embed method
+    '''
+    #TODO : can't be pickled
+    class MIL(model):
+        def __init__(self, network:InnerNetwork, **kwargs ) -> None:
+            # inner_shape is defined in the factory scope
+            super().__init__(network, **kwargs)
+            self.att1 = nn.Linear(network.output_shape, inner_shape)
+            self.att2 = nn.Linear(inner_shape, 1)
+        
+        def embed(self, x:Tensor) -> Tensor: 
+            '''Shape : (batch_size, n_instances, input_shape)'''
+            x = super().embed(x)
+            print(x.shape)
+            a = f.tanh(self.att1(x))
+            a = self.att2(a)
+            a = f.softmax(a, dim=1)
+            x = (x*a).sum(dim=1) # weighted sum of instances
+            return x
+    return MIL
 

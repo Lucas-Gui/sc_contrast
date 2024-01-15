@@ -43,7 +43,7 @@ class InstanceBagDataset(IterableDataset):
     Load data for Multiple Instance Learning.
     Yields (h,k) X tensors with h instances of the same class.
     '''
-    def __init__(self, df:pd.DataFrame, device='cpu', bag_size=5) -> None:
+    def __init__(self, df:pd.DataFrame, device='cpu', bag_size=5, p=0.5) -> None:
         super().__init__()
         init_dataset_from_dataframe(self, df, device)
         self.df = df
@@ -91,19 +91,13 @@ class ClassifierBagDataset(InstanceBagDataset):
     '''
     def generate(self):
         X,y = self.make_bags()
-        return zip(X, y)
+        for x,y_ in zip(X,y):  
+            yield (x,), (y_,)  
 
 class BatchBagDataset(InstanceBagDataset):
     '''
     Load data for Multiple Instance Learning batch contrastive learning.
     '''
-    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu', bag_size=5) -> None:
-        '''
-        p : probability to choose a positive pair at each pair sampling
-        '''
-        super().__init__(df, device=device, bag_size=bag_size)
-        self.p = p
-
     def generate(self):
         X,y = self.make_bags()
         for i in range(len(y)):
@@ -124,10 +118,9 @@ class BatchDataset(_DfDataset):
 
     def __init__(self, df: pd.DataFrame, p=0.5, device='cpu') -> None:
         '''
-        p : probability to choose a positive pair at each pair sampling
+        p is ignored
         '''
         super().__init__(df, device=device)
-        self.p = p
     
     def __getitem__(self, index) -> Any:
         x1 = self.x[index]
@@ -225,5 +218,6 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
             dls.append(None)
             continue
         ds = dataset_class(df, p=pos_frac  if i ==0 else 0.5) # use half/half +/- pairs for eval (only for relevant dataloaders)
-        dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=n_workers))
+        dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True if not issubclass(dataset_class, InstanceBagDataset) else None,
+                               num_workers=n_workers))
     return dls
