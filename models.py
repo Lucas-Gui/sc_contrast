@@ -135,21 +135,124 @@ class BatchContrastiveLoss(ContrastiveLoss):
         loss = P # original is sum but we want to divide by the number of examples
         loss = loss + self.alpha * torch.norm(embeddings, dim=-1)
         return loss.mean()
+
+# networks for embedding
+class InnerNetwork(Module):
+    # abstract class for inner networks of a model
+    output_shape:int
+    def __init__(self, normalize=True) -> None:
+        super().__init__()
+        self.normalize = normalize
+
+    def forward(self, x:Tensor) -> Tensor:
+        raise NotImplementedError
     
+    def embed(self, x:Tensor) -> Tensor:
+        x = self.forward(x)
+        if self.normalize:
+            x = x / x.norm(dim=-1, keepdim=True)
+        return x
+    
+class MLP(InnerNetwork):
+    def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
+                 output_shape:int=20, act = nn.ELU(), dropout = None, normalize=True) -> None:
+        super().__init__(normalize)
+        shape = [input_shape, *inner_shape, ]
+        modules = []
+        for i in range(len(shape)-1):
+            modules.append(nn.Linear(shape[i], shape[i+1]))
+            modules.append(act)
+            if dropout :
+                modules.append(nn.Dropout(p = dropout))
+        modules.append(nn.Linear(inner_shape[-1], output_shape))
+        self.layers = nn.Sequential(*modules)
+        self.output_shape=output_shape
+
+    def forward(self, x:Tensor) -> Tensor:
+        x = self.layers.forward(x)
+        return x
+
+class AttentionMIL(InnerNetwork):
+    '''Wrap around an inner network to perform attention pooling on the instances'''
+    def __init__(self, model:InnerNetwork,inner_shape=64, ) -> None:
+        super().__init__(model.normalize) #normalize only if the inner network does 
+        self.model = model    
+        self.att1 = nn.Linear(model.output_shape, inner_shape)
+        self.att2 = nn.Linear(inner_shape, 1)
+        self.output_shape = model.output_shape
+
+    def forward(self, x:Tensor) -> Tensor: 
+        '''Shape : (batch_size, n_instances, input_shape)'''
+        x = self.model.embed(x) #embed via inner network, which normalize first if needed
+        a = f.tanh(self.att1(x))
+        a = self.att2(a)
+        a = f.softmax(a, dim=1)
+        x = (x*a).sum(dim=1) # weighted sum of instances
+        return x #will be normalized again by InnerNetwork.embed
+    
+    def att_weights(self, x:Tensor) -> Tensor: 
+        '''
+        Return attention weights for visualization
+        Shape : (batch_size, n_instances, input_shape)'''
+        x = self.model.embed(x)
+        a = f.tanh(self.att1(x))
+        a = self.att2(a)
+        return a
+
+
+class AverageMIL(InnerNetwork):
+    '''Wrap around an inner network to perform average pooling on the instances'''
+    def __init__(self, model:InnerNetwork, ) -> None:
+        super().__init__(model.normalize)
+        self.model = model    
+        self.output_shape = model.output_shape
+
+    def forward(self, x:Tensor) -> Tensor: 
+        '''Shape : (batch_size, n_instances, input_shape)'''
+        x = self.model.embed(x)
+        x = x.mean(dim=1) 
+        return x
+
+# class AttentionMIL(Module):
+#     '''Wrap around an model to perform attention pooling on the instances
+#     '''
+#     def __init__(self, model:Model, inner_shape=64, ) -> None:
+#         super().__init__()
+#         self.model = model    
+#         self.att1 = nn.Linear(model.network.output_shape, inner_shape)
+#         self.att2 = nn.Linear(inner_shape, 1)
+
+#     def embed(self, x:Tensor) -> Tensor: 
+#         '''Shape : (batch_size, n_instances, input_shape)'''
+#         x = self.model.embed(x)
+#         print(x.shape)
+#         a = f.tanh(self.att1(x))
+#         a = self.att2(a)
+#         a = f.softmax(a, dim=1)
+#         x = (x*a).sum(dim=1) # weighted sum of instances
+#         return x
+    
+#     def forward(self, x:Tensor) -> Tensor:
+#         return self.model.forward(x)
+    
+
+
+
+
+#  models   
+# 
+
 
 class Model(Module):
     '''
     A network that can produce embeddings
     '''
-    def __init__(self, network : nn.Module, normalize=True, **kwargs) -> None: #captures **kwargs to pass paramters that are specific to some model types
+    def __init__(self, network : InnerNetwork,**kwargs) -> None: #captures **kwargs to pass paramters that are specific to some model types
         super().__init__()
         self.network = network
-        self.normalize = normalize
 
     def embed(self, x:Tensor) -> Tensor:
-        x = self.network(x)
-        if self.normalize:
-            x = x/torch.norm(x, keepdim=True, dim=-1)
+        x = self.network.embed(x)
         return x
     
     def forward(self, *x : List[Tensor]) -> Tuple[Tuple[Tensor, ...], Tensor]:
@@ -214,82 +317,13 @@ class CycleClassifier(Model):
         logits_2 = self.output_layer_2(f.relu(x))
         return (logits_1, logits_2), x
 
-class InnerNetwork(Module):
-    # abstract class for inner networks of a model
-    output_shape:int
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, x:Tensor) -> Tensor:
-        raise NotImplementedError
-    
-class MLP(InnerNetwork):
-    def __init__(self, input_shape:int, inner_shape:Sequence[int]= (100,100), 
-                 output_shape:int=20, act = nn.ELU(), dropout = None) -> None:
-        super().__init__()
-        shape = [input_shape, *inner_shape, ]
-        modules = []
-        for i in range(len(shape)-1):
-            modules.append(nn.Linear(shape[i], shape[i+1]))
-            modules.append(act)
-            if dropout :
-                modules.append(nn.Dropout(p = dropout))
-        modules.append(nn.Linear(inner_shape[-1], output_shape))
-        self.layers = nn.Sequential(*modules)
-        self.output_shape=output_shape
-
-    def forward(self, x:Tensor) -> Tensor:
-        x = self.layers.forward(x)
-
-        return x
-
-class AttentionMIL(InnerNetwork):
-    '''Wrap around an inner network to perform attention pooling on the instances'''
-    def __init__(self, model:InnerNetwork,inner_shape=64, ) -> None:
-        super().__init__()
-        self.model = model    
-        self.att1 = nn.Linear(model.output_shape, inner_shape)
-        self.att2 = nn.Linear(inner_shape, 1)
-        self.output_shape = model.output_shape
-
-    def forward(self, x:Tensor) -> Tensor: 
-        #TODO : embedding normalization should happen before attention
-        '''Shape : (batch_size, n_instances, input_shape)'''
-        x = self.model(x)
-        a = f.tanh(self.att1(x))
-        a = self.att2(a)
-        a = f.softmax(a, dim=1)
-        x = (x*a).sum(dim=1) # weighted sum of instances
-        return x
-
-# class AttentionMIL(Module):
-#     '''Wrap around an model to perform attention pooling on the instances
-#     '''
-#     def __init__(self, model:Model, inner_shape=64, ) -> None:
-#         super().__init__()
-#         self.model = model    
-#         self.att1 = nn.Linear(model.network.output_shape, inner_shape)
-#         self.att2 = nn.Linear(inner_shape, 1)
-
-#     def embed(self, x:Tensor) -> Tensor: 
-#         '''Shape : (batch_size, n_instances, input_shape)'''
-#         x = self.model.embed(x)
-#         print(x.shape)
-#         a = f.tanh(self.att1(x))
-#         a = self.att2(a)
-#         a = f.softmax(a, dim=1)
-#         x = (x*a).sum(dim=1) # weighted sum of instances
-#         return x
-    
-#     def forward(self, x:Tensor) -> Tensor:
-#         return self.model.forward(x)
-    
 def mil_factory(model:Type[Model], inner_shape=64, ) -> Model:
     '''
     Make a Multiple Instance Learning model from a model class by
     changing its embed method
     '''
-    #TODO : can't be pickled
+    #TODO : can't be pickled. ALso might not conform to latest designs
+    raise NotImplementedError("Cannot be pickled")
     class MIL(model):
         def __init__(self, network:InnerNetwork, **kwargs ) -> None:
             # inner_shape is defined in the factory scope
@@ -307,4 +341,3 @@ def mil_factory(model:Type[Model], inner_shape=64, ) -> Model:
             x = (x*a).sum(dim=1) # weighted sum of instances
             return x
     return MIL
-

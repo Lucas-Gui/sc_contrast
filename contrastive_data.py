@@ -5,32 +5,26 @@ import pandas as pd
 import numpy as np
 from typing import *
 
-#TODO : do this with multiple inheritance
-def init_dataset_from_dataframe(self, df:pd.DataFrame, device):
-    '''
-    Initialize a dataset from a dataframe.
-    Convert variant and cycle to labels and store categories.
-    '''
-    variants = df['variant']
-    self.cats = variants.cat.categories
-    self.y = torch.tensor(
-        variants.cat.codes.to_numpy(), dtype=int, device=device
-    )
-    self.cycle_cats = df['cycle'].cat.categories
-    self.cycle = torch.tensor(
-        df['cycle'].cat.codes.to_numpy(), dtype=int, device=device
-    )
-    self.x = torch.tensor(
-            df.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
-        dtype=torch.float32, device=device)
-    
+
 class _DfDataset(Dataset):
-    def __init__(self, df:pd.DataFrame, device) -> None:
+    def __init__(self, df:pd.DataFrame, device, **kwargs) -> None:
         '''
+        Initialize a dataset from a dataframe.
+        Convert variant and cycle to labels and store categories.
         Yield ((n examples), (n labels) pairs)'''
-        super().__init__()
-        init_dataset_from_dataframe(self, df, device)
-    
+        variants = df['variant']
+        self.cats = variants.cat.categories # seen variants are first
+        self.y = torch.tensor(
+            variants.cat.codes.to_numpy(), dtype=int, device=device
+        )
+        self.cycle_cats = df['cycle'].cat.categories
+        self.cycle = torch.tensor(
+            df['cycle'].cat.codes.to_numpy(), dtype=int, device=device
+        )
+        self.x = torch.tensor(
+                df.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
+            dtype=torch.float32, device=device)
+        
     def __len__(self):
         return len(self.y)
     
@@ -38,21 +32,24 @@ class _DfDataset(Dataset):
         raise NotImplementedError
 
 
-class InstanceBagDataset(IterableDataset):
+class InstanceBagDataset(IterableDataset, _DfDataset):
     '''
     Load data for Multiple Instance Learning.
     Yields (h,k) X tensors with h instances of the same class.
     '''
-    def __init__(self, df:pd.DataFrame, device='cpu', bag_size=5, p=0.5) -> None:
-        super().__init__()
-        init_dataset_from_dataframe(self, df, device)
+    def __init__(self, df:pd.DataFrame, device='cpu', bag_size=5, p=0.5, **kwargs) -> None:
+        _DfDataset.__init__(self, df, device=device) #this is ugly design but I don't want to rely on Pytorch being cooperative
+        # add numerical cell ids 
+        self.cell_ids = pd.DataFrame(np.arange(len(df)), index = df.index, columns=['ids'])
         self.df = df
         self.bag_size = bag_size
         self.device = device
 
     def make_bags(self):
         '''Randomly group the examples into same-label bags
-        Return a list of DataFrames (bags) and a DataFrame mapping bag index to bag label''' 
+        Return Tensors X and y with shape (batch_size, bag_size, n_features) and (batch_size,) respectively
+        and a dataframe with the cell ids for each bag
+        ''' 
         # First shuffle so that bags are different each epoch
         shuffled = self.df.sample(frac=1)
         # then group by variant and yield bags
@@ -63,18 +60,26 @@ class InstanceBagDataset(IterableDataset):
             dfs.append(group)
         bags = pd.concat(dfs)
         X = torch.tensor(
-            bags.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
-        dtype=torch.float32, device=self.device)
+                bags.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
+            dtype=torch.float32, device=self.device
+            )
         y = torch.tensor(
             bags.variant.cat.codes.to_numpy(), dtype=int, device=self.device
         )
         X = X.reshape(-1, self.bag_size, X.size(1))
         y = y[::self.bag_size]
+        # make cell id table (batch nb, instance nb)
+        cell_index = self.cell_ids.loc[bags.index]
+        cell_index['instance'] = np.tile(np.arange(self.bag_size), len(cell_index) // self.bag_size)
+        cell_index['batch'] = np.repeat(np.arange(len(cell_index) // self.bag_size), self.bag_size)
+        cell_index = cell_index.pivot(index='batch', columns='instance', values='ids')
+        print(cell_index.shape)
         # shuffle bags
         idx = torch.randperm(len(y))
         X = X[idx]
         y = y[idx]
-        return X, y
+        cell_index = cell_index.iloc[idx]
+        return X, y, cell_index
     
     def __iter__(self):
         return iter(self.generate())
@@ -90,16 +95,25 @@ class ClassifierBagDataset(InstanceBagDataset):
     Load data for Multiple Instance Learning classification.
     '''
     def generate(self):
-        X,y = self.make_bags()
+        X,y, _ = self.make_bags()
         for x,y_ in zip(X,y):  
             yield (x,), (y_,)  
+
+class ClassifierBagDatasetWithIDs(InstanceBagDataset): #not sure if making two classes is useful. 
+    '''
+    Load data for Multiple Instance Learning classification, with cell ids for analysis.
+    '''
+    def generate(self):
+        X,y, cell_ids = self.make_bags()
+        for x,y_, cell in zip(X,y, cell_ids.values):  
+            yield (x,), (y_, cell)  
 
 class BatchBagDataset(InstanceBagDataset):
     '''
     Load data for Multiple Instance Learning batch contrastive learning.
     '''
     def generate(self):
-        X,y = self.make_bags()
+        X,y, _ = self.make_bags()
         for i in range(len(y)):
             x1 = X[i]
             y1 = y[i]
@@ -116,7 +130,7 @@ class BatchDataset(_DfDataset):
     Yields (x1, x2) , (y,) tensors, where x1 and x2 have the same label y
     """
 
-    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu') -> None:
+    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu', **kwargs) -> None:
         '''
         p is ignored
         '''
@@ -132,7 +146,7 @@ class BatchDataset(_DfDataset):
     
 class SiameseDataset(_DfDataset):
 
-    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu') -> None:
+    def __init__(self, df: pd.DataFrame, p=0.5, device='cpu', **kwargs) -> None:
         '''
         p : probability to choose a positive pair at each pair sampling
         '''
@@ -156,7 +170,7 @@ class ClassifierDataset(_DfDataset):
     '''
     p is ignored
     '''
-    def __init__(self, df: pd.DataFrame, p=None, device='cpu') -> None:
+    def __init__(self, df: pd.DataFrame, p=None, device='cpu', **kwargs) -> None:
         super().__init__(df, device=device)
 
     def __getitem__(self, index) -> Any:
@@ -200,13 +214,15 @@ class BipartiteDataset(Dataset): #TODO : conform to superclass return scheme for
     
 class CycleClassifierDataset(_DfDataset):
     '''Return two labels, variant and cell cycle'''
-    def __init__(self, df: pd.DataFrame, p=None, device='cpu') -> None:
+    def __init__(self, df: pd.DataFrame, p=None, device='cpu', **kwargs) -> None:
         super().__init__(df, device=device)
 
     def __getitem__(self, index) -> Any:
         return (self.x[index],), (self.y[index], self.cycle[index]) 
 
-def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset, n_workers = 8, pos_frac=0.5, device='cpu') -> Tuple[DataLoader]:
+def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
+                 dataset_kwargs={},
+                 n_workers = 8, device='cpu') -> Tuple[DataLoader]:
     '''
     pos_frac : fraction of positive pairs in training set (first dataloader.).
     Other dataloaders will have a 50% fraction of positive pairs.
@@ -217,7 +233,7 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
         if len(df) == 0:
             dls.append(None)
             continue
-        ds = dataset_class(df, p=pos_frac  if i ==0 else 0.5) # use half/half +/- pairs for eval (only for relevant dataloaders)
+        ds = dataset_class(df, p=pos_frac  if i ==0 else 0.5, **dataset_kwargs) # use half/half +/- pairs for eval (only for relevant dataloaders)
         dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True if not issubclass(dataset_class, InstanceBagDataset) else None,
                                num_workers=n_workers))
     return dls

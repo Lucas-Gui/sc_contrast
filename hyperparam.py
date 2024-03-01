@@ -78,8 +78,8 @@ class ShapeSampler():
         self.n_neurons_min = n_neurons_min
         self.n_neurons_max = n_neurons_max
     def sample(self):
-        n = rng.integers(self.n_neurons_min, self.n_neurons_max, endpoint=True, dtype=int)
-        l = rng.integers(1, self.n_layer_max, dtype=int )
+        n = rng.integers(self.n_neurons_min, self.n_neurons_max+1, endpoint=True, dtype=int)
+        l = rng.integers(1, self.n_layer_max+1, dtype=int )
         return ' '.join([str(n)] * l)
 
 # PARAM_LIST = [
@@ -100,21 +100,23 @@ class ShapeSampler():
 
 # ]
 
-PARAM_LIST = [
+PARAM_LIST = [ # ,  siamese only
     NumParamSampler('lr', 1e-5, 1e-1, 'log'),
     CatParamSampler('scheduler', ['restarts','plateau']),
-    NumParamSampler('patience',10,200, 'log', type=int),
-    NumParamSampler('cosine-t',200, 600, 'lin', type=int),
-    CatParamSampler('loss',[*main.loss_dict.keys()]),# will have to reset to standard if we are not choosing siamese
-    NumParamSampler('margin',1e-3, 1-1e-3, 'logodds'),
+    NumParamSampler('patience',10,500, 'log', type=int),
+    NumParamSampler('cosine-t',50, 600, 'lin', type=int),
+    ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
+    # NumParamSampler('margin',0.5, 4, 'log'),
     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-    NumParamSampler('dropout', min_val=1e-1, max_val=0.5,mode='log'),
-    NumParamSampler('weight-decay', min_val=1e-4, max_val=1,mode='log'),
-    NumParamSampler('batch-size', min_val=16, max_val=1024, mode='pow2'),
-    NumParamSampler('positive-fraction', 0.01, 0.99, 'logodds', ),
-    ConstParamSampler('shape','100 100'),
+    NumParamSampler('dropout', min_val=1e-3, max_val=0.5,mode='log'),
+    NumParamSampler('weight-decay', min_val=1e-5, max_val=10,mode='log'),
+    NumParamSampler('batch-size', min_val=128, max_val=2048, mode='pow2'),
+    NumParamSampler('positive-fraction', 0.4, 0.6, 'logodds', ),
+    ShapeSampler('shape',4, 20, 1_000),
     ConstParamSampler('embed-dim', 20),
-    ConstParamSampler('task','batch-supervised')
+    ConstParamSampler('task', 'siamese'),
+    # CatParamSampler('mil-mode',['mean', 'attention']),
+    # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 ]
 
 def make_task(args)-> str:
@@ -130,27 +132,40 @@ def sample(params, ):
         d['loss'] = 'standard'
     return d
 
-async def worker(name, worker_name, gen, path):
+async def worker(name, worker_name, gen, path, load_split = True):
     log = open(f'logs/{name}/{worker_name}.log', 'w')
-    for task_name, params in gen:
-        print(f'Starting task {task_name} on worker {worker_name}')
-        log.write(f'Task {task_name}\n')
-        cmd =  f'python main.py {path} {task_name} --dest-name {name} --verbose 1'+' '\
+    for task_name, params, i in gen:
+        # creating the command
+        cmd =  f'python main.py {path} {task_name} --dest-name {name} --verbose 1 '\
                 +' '.join([f'--{arg} {param}' for arg, param in params.items() ])
+        if i > 0 and load_split:
+            cmd += f' --load-split {name}/{name}_0' # this relies on the fact that the name is name_i
+            if i <= int(worker_name):
+                await asyncio.sleep(10) # wait some time to allow first worker to split the data on first task
+        # logging
+        t = datetime.now()
+        print(f'Starting task {task_name} on worker {worker_name} at time {t.strftime("%d/%m %H:%M")}.')
+        log.write(f'Task {task_name}\n')
         log.write(cmd+'\n')
+
         process = await asyncio.create_subprocess_shell(
             cmd,
             stdout=log,
             stderr=log
         )
-        await process.wait()
+        exit_code = await process.wait()
         log.write('\n')
-        print(f'Finishing task {task_name} on worker {worker_name}')
+        log.flush()
+        dt = (datetime.now() - t)
+        print(f'Finished task {task_name} on worker {worker_name} after {dt.seconds // 60 }m {dt.seconds % 60}s.')
+        if exit_code != 0:
+           raise RuntimeError(f'Error in task {task_name} on worker {worker_name} : exit code {exit_code}.')
     log.close()
 
 async def main_f(args):
-
-    gen = ((args.name+f"_{i}", sample(PARAM_LIST)) for i in range(args.n_models))
+    #TODO : create directories for everything so that first workers don't try to do it at the same time
+    #TODO : add a checkpoint to wait for first worker to split data before starting the others
+    gen = ((args.name+f"_{i}", sample(PARAM_LIST), i) for i in range(args.i0, args.i0+args.n_models))
     workers = [asyncio.create_task(worker(args.name, str(i), gen, args.path)) for i in range(args.n_workers)]
     await asyncio.gather(*workers)
 
@@ -160,10 +175,15 @@ if __name__ == '__main__':
     parser.add_argument('name')
     parser.add_argument('-n','--n-workers', help='Number of model to train in parallel',type=int, default=8)
     parser.add_argument('-N', '--n-models', help='Total number of models to train', default=1000, type=int)
+    parser.add_argument('--i0', help='Index of first model to train (useful to continue previous experiments)', default=0, type=int)
+
     
     args = parser.parse_args()
 
     main.make_dir_if_needed(f'logs/{args.name}')
+    main.make_dir_if_needed(f'models/{args.name}')
+    main.make_dir_if_needed(f'runs/{args.name}')
+
     
 
     asyncio.run(main_f(args))

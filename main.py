@@ -129,8 +129,9 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
                 n_epoch=10_000, 
                  ):
     i_0 = run_meta['i']
-    stop_score = f'{ctx.k_nn}_nn_ref'
+    stop_score = f'{ctx.k_nn}_nn_ref' # TODO : CHANGE TO SELF OR SET IN ARGS/CONTEXT
     print(optimizer)
+    print('Early stopping metric : ', stop_score)
     bar = tqdm(range(i_0, i_0+n_epoch), position=0, disable= ctx.verbosity <=1)
     best_score = - np.inf
     for i in bar:
@@ -140,9 +141,8 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         
         metrics_seen =  core_loop(test_seen, model, loss_fn, optimizer=None, mode='test')
         metrics_seen[f'{ctx.k_nn}_nn_ref'] = knn_ref_score(
-            model, train.dataset.x[:,None,:], # add empty dimensions to x for compatibility with MIL models
-            test_seen.dataset.x[:,None,:],
-              train.dataset.y, test_seen.dataset.y, k=1, device=ctx.device)
+            model, train, 
+            test_seen, k=ctx.k_nn, device=ctx.device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen[stop_score] > best_score:
             best_score = metrics_seen[stop_score]
@@ -171,10 +171,8 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss,
               unseen=False)-> Tensor:
     if mode == 'train':
         model.train()
-        print('train')
     elif mode == 'test':
         model.eval()
-        print('test')
 
     loss_l = []
     y_l = []
@@ -232,7 +230,7 @@ def main(args, counts, unseen_frac = 0.25):
     meta_file = join(run_dir, 'meta.json')
 
     config = config_dict[args.task]
-    if args.instance > 1:
+    if args.bag_size >= 1:
         try : 
             config.dataset_class = bag_dataset_dict[args.task]
         except KeyError:
@@ -258,21 +256,26 @@ def main(args, counts, unseen_frac = 0.25):
         pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(index_dir, 'categories.csv')) #save category order
         in_shape = dataframes[0].shape[1]-3
         inner_network = MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
-                    output_shape=args.embed_dim,)
-        if args.instance > 1:
-            inner_network = AttentionMIL(inner_network, inner_shape=64)
+                    output_shape=args.embed_dim, normalize= not args.no_norm_embeds,)
+        if args.bag_size >= 1:
+            match args.mil_mode:
+                case 'attention':
+                    inner_network = AttentionMIL(inner_network, inner_shape=64)
+                case 'mean':
+                    inner_network = AverageMIL(inner_network, )
+                case _:
+                    raise NotImplementedError(f'MIL mode {args.mil_mode} is not implemented')                
         model = config.model_class(
-               inner_network, normalize= not args.no_norm_embeds,
+               inner_network, 
             #task-specific kwargs
             n_class = dataframes[0]['variant'].nunique() # should be equal to nb of codes 
                             ).to(ctx.device)
-
         run_meta = {
             'i':0,
         }
     train, test_seen, test_unseen = make_loaders(
         *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
-        pos_frac = args.positive_fraction, dataset_class=config.dataset_class,
+         dataset_class=config.dataset_class, dataset_kwargs={'bag_size':args.bag_size},
         device=ctx.device)
     in_shape = next(iter(train))[0][0].shape[1]
 
@@ -344,7 +347,8 @@ def make_parser():
 
     parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='siamese')
     parser.add_argument('--knn', default=5, type=int, help='Number of neighbors for knn scoring')
-    parser.add_argument('--instance', default=1, type=int, help='Number of instances to use for Multiple Instance Learning')
+    parser.add_argument('--bag-size', '--instance', default=0, type=int, help='Number of bag_sizes to use for Multiple Instance Learning. If 0, do not use MIL')
+    parser.add_argument('--mil-mode', choices=['attention','mean'], default='attention', help='MIL aggregation mode')
 
     parser.add_argument('-c', '--config-file', is_config_file_arg=True, help='add config file')
     parser.add_argument('--n-workers', default=0, type=int, help='Number of workers for datalaoding')
