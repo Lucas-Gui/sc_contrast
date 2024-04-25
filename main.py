@@ -25,8 +25,6 @@ from dataclasses import dataclass
 from contextlib import nullcontext
 
 import pprint
-
-
 # config 
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
@@ -57,7 +55,8 @@ bag_dataset_dict = {
     'batch-supervised':BatchBagDataset,
 }
 
-# context -> to put all global variables in the same place
+# Context : to put all arguments to main that will be passed down to core_loop and train_model,
+#   in order to limit the size of function calls/definitions
 
 @dataclass 
 class Context():
@@ -68,7 +67,7 @@ class Context():
     k_nn:int = 3
     verbosity:int = 3
 
-ctx = Context() # in a jupyter notebook, assign the correct values to this instance
+# ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
 
 def make_dir_if_needed(path):
     if not os.path.exists(path):
@@ -135,7 +134,7 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
         
 def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
                 loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler, writer:SummaryWriter,
-                n_epoch=10_000, 
+                ctx:Context, n_epoch=10_000, 
                  ):
     i_0 = run_meta['i']
     stop_score = f'{ctx.k_nn}_nn_ref' # TODO : CHANGE TO SELF OR SET IN ARGS/CONTEXT
@@ -148,7 +147,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
         metrics_train = core_loop(train, model, loss_fn, optimizer, mode='train')
         write_metrics(metrics_train, writer, 'train', i)
         
-        metrics_seen =  core_loop(test_seen, model, loss_fn, optimizer=None, mode='test')
+        metrics_seen =  core_loop(test_seen, model, loss_fn, optimizer=None, mode='test', ctx=ctx)
         metrics_seen[f'{ctx.k_nn}_nn_ref'] = knn_ref_score(
             model, train, 
             test_seen, k=ctx.k_nn, device=ctx.device)
@@ -175,7 +174,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
 
 
 
-def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, 
+def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context,
               optimizer:torch.optim.Optimizer=None, mode:Literal['train','test']='test',
               unseen=False)-> Tensor:
     if mode == 'train':
@@ -231,7 +230,7 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss,
     return metrics
 
 
-def main(args, counts, unseen_frac = 0.25):
+def main(args, counts, ctx:Context, unseen_frac = 0.25):
     print(f"{run_dir=}")
 
     index_dir = join(run_dir, 'split')
@@ -306,17 +305,17 @@ def main(args, counts, unseen_frac = 0.25):
 
     train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
-                n_epoch=args.n_epochs,
+                n_epoch=args.n_epochs, ctx=ctx
                 )
     
-def test(args):
+def test(args): #TODO : Fix. in particular, make a fake data directory with all the necessary files to use load_data
     print('---RUNNING TEST--- ')
     args.data_path = None
     args.restart = False
     make_dir_if_needed(run_dir)
     counts = pd.read_csv('/home/lguirardel/data/perturb_comp/data/KRAS_test.csv', index_col=0)
 
-    main(args, counts, unseen_frac=0)
+    main(args, counts, unseen_frac=0, ctx=Context())
 
 
 def make_parser():
@@ -439,5 +438,5 @@ if __name__ == '__main__':
                        standardize=args.data_subset != 'processed')
 
     ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn, verbosity=args.verbose)
-    main(args, counts, unseen_frac=args.unseen_fraction)
+    main(args, counts, unseen_frac=args.unseen_fraction, ctx=ctx)
     
