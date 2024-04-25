@@ -340,7 +340,7 @@ def make_parser():
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
-  
+    
     parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
@@ -434,7 +434,8 @@ if __name__ == '__main__':
     print(f'Using {device}.')
     paths = get_paths(args.data_path, subset=args.data_subset)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt)
+    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
+                       standardize=args.data_subset != 'processed')
 
     ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn, verbosity=args.verbose)
     main(args, counts, unseen_frac=args.unseen_fraction)

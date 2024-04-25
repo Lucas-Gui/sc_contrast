@@ -2,10 +2,11 @@ import gzip
 import pandas as pd
 import numpy as np
 
-
+EPS_STD = 1e-3
 
 def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
-              cell_meta_path, group_wt_like=False, filt_variants = None)-> pd.DataFrame:
+              cell_meta_path, group_wt_like=False, filt_variants = None,
+              standardize=False)-> pd.DataFrame:
     '''
     *_path : paths to gzipped mtx or csv files
     except variant_path, which refers to an unzipped csv file
@@ -49,16 +50,24 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     #impute variant/impact class to cell and drop cells with missing values
     counts = counts.merge(v2c, how='left', left_index=True, right_on='cell').dropna(axis=0).set_index('cell')
     counts = counts[counts.variant != 'unassigned']
-    if filt_variants:
+    if filt_variants is not None:
         counts = counts[counts.variant.isin(filt_variants)]
     if group_wt_like:
         print('\t\tGrouping control variants.')
         filt = (counts['variant'].str[0] == counts['variant'].str[-1])  | (counts.variant == 'WT')
         print(f"\t\tCasting {counts[filt].variant.nunique()} variants to 'control' ")
         counts.loc[filt, 'variant']= 'control'
+    if standardize:
+        print('\t\tRemoving low variance genes and standardizing data')
+        low_var_genes = counts.iloc[:,:-3].std()< EPS_STD
+        print('\t\t',(low_var_genes).sum(), f"genes with std < {EPS_STD:.1e} dropped")
+        counts = counts.drop(columns=low_var_genes[low_var_genes].index)
+        counts.iloc[:,:-3] = (counts.iloc[:,:-3] - counts.iloc[:,:-3].mean())/counts.iloc[:,:-3].std()
+
     print(f"\t\t{len(counts['variant'].unique())} variant classes")
     counts['variant'] = counts['variant'].astype('category')
     return counts
+
 
 def check_mtx_columns(counts:pd.DataFrame, genes:pd.Series, cells:pd.Series):
     '''Check that the columns in the mtx file are consistent with the gene and cell files and permute columns if necessary'''
