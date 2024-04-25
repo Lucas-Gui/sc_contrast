@@ -5,4 +5,3 @@ __pycache__
 scripts/
 _*.ipynb
 deeplift/models
-deeplift/out
