@@ -138,6 +138,7 @@ PARAM_LIST = [ # ,  siamese only
     # FOR NABID DATA
     ConstParamSampler('unseen-fraction', 0),
     ConstParamSampler('data-subset', 'filtered'),
+    # ConstParamSampler('filter-variants','filt_nabid'),
     # CatParamSampler('mil-mode',['mean', 'attention']),
     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 ]
@@ -186,7 +187,8 @@ async def worker(name, worker_name, gen, path, load_split = True, overwrite = Fa
         dt = (datetime.now() - t)
         print(f'Finished task {task_name} on worker {worker_name} after {dt.seconds // 60 }m {dt.seconds % 60}s.')
         if exit_code != 0:
-           raise RuntimeError(f'Error in task {task_name} on worker {worker_name} : exit code {exit_code}.')
+           raise RuntimeError(f"""Error in task {task_name} on worker {worker_name} : exit code {exit_code}. 
+                              See logs/{task_name}/{worker_name}.log for details.""")
     log.close()
 
 async def main_f(args):
