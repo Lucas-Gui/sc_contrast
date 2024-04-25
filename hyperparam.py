@@ -132,12 +132,17 @@ def sample(params, ):
         d['loss'] = 'standard'
     return d
 
-async def worker(name, worker_name, gen, path, load_split = True):
+async def worker(name, worker_name, gen, path, load_split = True, overwrite = False):
     log = open(f'logs/{name}/{worker_name}.log', 'w')
     for task_name, params, i in gen:
         # creating the command
-        cmd =  f'python main.py {path} {task_name} --dest-name {name} --verbose 1 '\
-                +' '.join([f'--{arg} {param}' for arg, param in params.items() ])
+    #python main.py ~/data/nabid_data/p53pilot/Data/RawData/filtered_feature_bc_matrix/wrangled/ test_nabid --dest-name nabid 
+
+        cmd =  (f'python main.py {path} {task_name} --dest-name {name} --verbose 1 ' 
+                # +'--no-norm-embeds ' # !! to change if wanted
+                +' '.join([f'--{arg} {param}' for arg, param in params.items() ]))
+        if overwrite:
+            cmd += ' --overwrite'
         if i > 0 and load_split:
             cmd += f' --load-split {name}/{name}_0' # this relies on the fact that the name is name_i
             if i <= int(worker_name):
@@ -166,7 +171,7 @@ async def main_f(args):
     #TODO : create directories for everything so that first workers don't try to do it at the same time
     #TODO : add a checkpoint to wait for first worker to split data before starting the others
     gen = ((args.name+f"_{i}", sample(PARAM_LIST), i) for i in range(args.i0, args.i0+args.n_models))
-    workers = [asyncio.create_task(worker(args.name, str(i), gen, args.path)) for i in range(args.n_workers)]
+    workers = [asyncio.create_task(worker(args.name, str(i), gen, args.path, overwrite=args.overwrite)) for i in range(args.n_workers)]
     await asyncio.gather(*workers)
 
 if __name__ == '__main__':
@@ -176,7 +181,7 @@ if __name__ == '__main__':
     parser.add_argument('-n','--n-workers', help='Number of model to train in parallel',type=int, default=8)
     parser.add_argument('-N', '--n-models', help='Total number of models to train', default=1000, type=int)
     parser.add_argument('--i0', help='Index of first model to train (useful to continue previous experiments)', default=0, type=int)
-
+    parser.add_argument('--overwrite', help='Overwrite previous experiments', action='store_true')
     
     args = parser.parse_args()
 
