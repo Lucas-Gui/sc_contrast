@@ -5,7 +5,7 @@ import numpy as np
 
 
 def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
-              cell_meta_path, group_wt_like=False)-> pd.DataFrame:
+              cell_meta_path, group_wt_like=False, filt_variants = None)-> pd.DataFrame:
     '''
     *_path : paths to gzipped mtx or csv files
     except variant_path, which refers to an unzipped csv file
@@ -21,6 +21,7 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
         genes = pd.read_csv(file, header=None, sep=' ', ).squeeze()
     with gzip.open(cell_path) as file:
         cells = pd.read_csv(file,header=None, sep=' ', ).squeeze()
+    check_mtx_columns(counts, genes, cells)
     print('\t\tReading variant data', flush=True)
     with gzip.open(v2c_path) as file: # read cell tags
         v2c = pd.read_csv(file, sep='\t', usecols=['cell','variant'])
@@ -30,6 +31,7 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
         cell_meta = pd.read_csv(file, index_col=-1  )
     cycle = cell_meta['phase.multi'].replace('G0', 'Uncycling')
     print('\tMerging and processing...' ,flush=True)
+
     #pivot 
     counts['gene_name'] = genes.loc[counts.gene].reset_index(drop=True)
     counts['cell_name'] = cells.loc[counts.cell].reset_index(drop=True)
@@ -47,6 +49,8 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     #impute variant/impact class to cell and drop cells with missing values
     counts = counts.merge(v2c, how='left', left_index=True, right_on='cell').dropna(axis=0).set_index('cell')
     counts = counts[counts.variant != 'unassigned']
+    if filt_variants:
+        counts = counts[counts.variant.isin(filt_variants)]
     if group_wt_like:
         print('\t\tGrouping control variants.')
         filt = (counts['variant'].str[0] == counts['variant'].str[-1])  | (counts.variant == 'WT')
@@ -55,6 +59,29 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     print(f"\t\t{len(counts['variant'].unique())} variant classes")
     counts['variant'] = counts['variant'].astype('category')
     return counts
+
+def check_mtx_columns(counts:pd.DataFrame, genes:pd.Series, cells:pd.Series):
+    '''Check that the columns in the mtx file are consistent with the gene and cell files and permute columns if necessary'''
+    n1, n2 = counts.gene.max(), counts.cell.max()
+    m1, m2 = genes.shape[0]-1, cells.shape[0]-1
+    if n1 == m2 and n2 == m1:
+        print('\t'*3+'Permuting gene columns to match gene file') 
+        if n1 == n2:
+            print("Number of genes and cells are equal. Please check that the mtx file is (genes x cells) and not (cells x genes).")
+        counts[['gene','cell']] = counts[['cell','gene']]
+    elif n2 != m2 or n1 != m1:
+        print('counts')
+        print(counts.shape)
+        print(counts.head())
+        print('genes')
+        print(genes.shape)
+        print(genes.head())
+        print(counts.gene.max())
+        print('cells')
+        print(cells.shape)
+        print(cells.head())
+        print(counts.cell.max())
+        raise ValueError('Gene file does not match mtx file')
 
 def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sample ?
     '''
@@ -67,10 +94,13 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     variants = np.random.permutation(variants)
     if 'control' in data.variant.cat.categories:
         variants = np.concatenate((np.array(['control']), variants))
-    test_vars = variants[-int(len(variants)*x_var):]
     data['variant'] = data.variant.cat.reorder_categories(variants)
-
-    test_unseen = data[data['variant'].isin(test_vars)]
+    if x_var == 0:
+        test_vars = []
+        test_unseen = pd.DataFrame(columns=data.columns)
+    else:
+        test_vars = variants[-int(len(variants)*x_var):]
+        test_unseen = data[data['variant'].isin(test_vars)]
     train = data[~data['variant'].isin(test_vars)]
     test_seen = train.sample(frac=x_cell, replace=False)
     train = train.loc[train.index.difference(test_seen.index)]
