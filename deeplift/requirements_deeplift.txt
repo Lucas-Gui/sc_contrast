@@ -1,0 +1,7 @@
+python==3.7
+tensorflow==1.15
+h5py==3.8
+deeplift
+seaborn
+scikit-learn
+jupyter

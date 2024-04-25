@@ -28,4 +28,4 @@ configargparse
 sp1md # for Hotelling's t test 
 ```
 
-Package versions are supplied as used, but later versions should work as well.
+Package versions are supplied as used, but later versions might work as well.
