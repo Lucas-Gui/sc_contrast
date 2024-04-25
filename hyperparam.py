@@ -100,25 +100,47 @@ class ShapeSampler():
 
 # ]
 
+# PARAM_LIST = [ # ,  siamese only
+#     NumParamSampler('lr', 1e-5, 1e-1, 'log'),
+#     CatParamSampler('scheduler', ['restarts','plateau']),
+#     NumParamSampler('patience',10,500, 'log', type=int),
+#     NumParamSampler('cosine-t',50, 600, 'lin', type=int),
+#     ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
+#     # NumParamSampler('margin',0.5, 4, 'log'),
+#     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
+#     NumParamSampler('dropout', min_val=1e-3, max_val=0.5,mode='log'),
+#     NumParamSampler('weight-decay', min_val=1e-5, max_val=10,mode='log'),
+#     NumParamSampler('batch-size', min_val=128, max_val=2048, mode='pow2'),
+#     NumParamSampler('positive-fraction', 0.4, 0.6, 'logodds', ),
+#     ShapeSampler('shape',4, 20, 1_000),
+#     ConstParamSampler('embed-dim', 20),
+#     ConstParamSampler('task', 'siamese'),
+#     # CatParamSampler('mil-mode',['mean', 'attention']),
+#     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
+# ]
+
 PARAM_LIST = [ # ,  siamese only
-    NumParamSampler('lr', 1e-5, 1e-1, 'log'),
-    CatParamSampler('scheduler', ['restarts','plateau']),
-    NumParamSampler('patience',10,500, 'log', type=int),
+    NumParamSampler('lr', 1e-4, 1e-1, 'log'),
+    ConstParamSampler('scheduler', 'restarts'),
+    # NumParamSampler('patience',10,500, 'log', type=int),
     NumParamSampler('cosine-t',50, 600, 'lin', type=int),
     ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
     # NumParamSampler('margin',0.5, 4, 'log'),
     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-    NumParamSampler('dropout', min_val=1e-3, max_val=0.5,mode='log'),
-    NumParamSampler('weight-decay', min_val=1e-5, max_val=10,mode='log'),
-    NumParamSampler('batch-size', min_val=128, max_val=2048, mode='pow2'),
-    NumParamSampler('positive-fraction', 0.4, 0.6, 'logodds', ),
-    ShapeSampler('shape',4, 20, 1_000),
+    NumParamSampler('dropout', min_val=1e-3, max_val=0.1,mode='log'),
+    NumParamSampler('weight-decay', min_val=1e-5, max_val=1,mode='log'),
+    ConstParamSampler('batch-size', 512),
+    # NumParamSampler('positive-fraction',0.4,0.6, 'logodds', ),
+    ShapeSampler('shape',4, 100, 1_000),
     ConstParamSampler('embed-dim', 20),
-    ConstParamSampler('task', 'siamese'),
+    CatParamSampler('task',[*main.config_dict.keys()]),
+    ConstParamSampler('n-epochs', 200),
+    # FOR NABID DATA
+    ConstParamSampler('unseen-fraction', 0),
+    ConstParamSampler('data-subset', 'filtered'),
     # CatParamSampler('mil-mode',['mean', 'attention']),
     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 ]
-
 def make_task(args)-> str:
     pass
 
