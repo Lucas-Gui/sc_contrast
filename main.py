@@ -98,17 +98,19 @@ def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'p
         paths.extend(l)
     return paths
 
-def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True) -> List[pd.DataFrame]:
+def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True,
+               ) -> List[pd.DataFrame]:
         '''
-        If reorder_categories, use saved category order. This is important for classifier models,
+        If reorder_categories, use saved category order and drop unused categories. This is important for classifier models,
         as category order defines the label.
         Set it to false if the categories are not the same as during training ("control" split into individual variants, for example)
         '''
         i = 0
-        dataframes = []
+        dataframes = []          
         if reorder_categories:
             cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
-            counts['variant'] = counts.variant.cat.reorder_categories(cat)
+            counts = counts[counts['variant'].isin(cat)].copy() # drop unused variants
+            counts['variant'] = counts.variant.cat.remove_unused_categories().cat.reorder_categories(cat)
         else:
             warn('Not reordering categories will lead to wrong classifier prediction')
         while os.path.isfile(join(index_dir, f'index_{i}.csv')):
@@ -329,7 +331,7 @@ def make_parser():
     parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
     parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
     parser.add_argument('--unseen-fraction', default=0.25, type=float, help='Fraction of unseen variants')
-
+    
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
     parser.add_argument('-m','--margin',default=1, type=float, help='Contrastive loss margin parameter')
@@ -425,10 +427,9 @@ if __name__ == '__main__':
     # load variants to include
     filt = None
     if args.filter_variants is not None:
-        with open(args.filter_variants) as file:
-            filt = pd.read_csv(file, header=None).squeeze()
-            filt = filt.str.upper()
-            print(f'Filtering for {filt}')
+        filt = pd.read_csv(args.filter_variants, header=None).squeeze()
+        filt = filt.str.upper()
+        print(f'Filtering for {filt.values}')
     print()
     device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
