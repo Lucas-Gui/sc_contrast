@@ -34,26 +34,41 @@ def knn_ref_score(model:Model, x_train:DataLoader, x_test:DataLoader, k=3, devic
     Compute subset accuracy of knn classification, using x_train embeddings as the reference and x_test as the example to classify
     NB : x_train will be stored in memory in tensor form to compute the knns
     '''
+    y_test, y_pred, _ = knn_ref_predict(model, x_train, x_test, k, device)
+    return accuracy_score(y_test, y_pred)
+
+def knn_ref_predict(model:Model, train:DataLoader, test:DataLoader, k, device='cpu', return_x = False):
+    '''
+    Compute predictions of ref-knn classification, using x_train embeddings as the reference and x_test as the examples to classify.
+    Use knn_ref_score to compute the accuracy, and this function to get the predictions, inputs, and embeddings
+    '''
     model.eval()
     model = model.to(device)
-    emb_train, y_train = [], []
-    for x,y in x_train: # x,y are tuples of tensors of any size, we're taking the first one
+    emb_train, y_train, X_train = [], [], []
+    for x,y in train: # x,y are tuples of tensors of any size, we're taking the first one
         with torch.no_grad():
             emb_train.append(model.embed(x[0].to(device)).cpu().squeeze())
             y_train.append(y[0])
-    emb_test, y_test = [], []
-    for x,y in x_test:
+            if return_x:
+                X_train.append(x[0])
+    emb_test, y_test, X_test = [], [], []
+    for x,y in test:
         with torch.no_grad():
             emb_test.append(model.embed(x[0].to(device)).cpu().squeeze())
             y_test.append(y[0])
+            if return_x:
+                X_test.append(x[0])
     emb_train = torch.concat(emb_train)
     emb_test = torch.concat(emb_test)
     y_train = torch.concat(y_train)
     y_test = torch.concat(y_test)
+    if return_x:
+        X_train = torch.concat(X_train)
+        X_test = torch.concat(X_test)
     knn = KNeighborsClassifier(k)
     knn.fit(emb_train, y_train)
     y_pred = knn.predict(emb_test)
-    return accuracy_score(y_test, y_pred)
+    return y_test, y_pred, (y_train, X_train, X_test, emb_train, emb_test)
 
 @torch.no_grad
 def knn_self_score(embed:Tensor, y:Tensor,k=3):
