@@ -78,16 +78,23 @@ def make_dir_if_needed(path):
             raise FileExistsError(path)
     
 
-def get_paths(data_dir:str):
+def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'processed'): # TODO move to data_utils
     '''
     Reads and returns, in that order :
-        <variant>.processed.matrix.mtx.gz, '''
-    _r = '.processed'
+        <gene>.<subset>.matrix.mtx.gz, '''
+    if subset == 'processed':
+        _r = '.processed'
+    elif subset == 'raw':
+        _r = '.rawcounts'
+    elif subset == 'filtered':
+        _r = '.filtered'
+    else:
+        raise ValueError('subset should be "processed", "raw" or "filtered"')
     paths = []
     for p in [_r+'.matrix.mtx.gz',_r+'.genes.csv.gz',_r+'.cells.csv.gz', '.variants2cell.csv.gz', 
               '.variants.csv', '.cells.metadata.csv.gz']:
-        l = glob(join(data_dir, '*'+p))
-        assert len(l)==1, f"There should be exaclty one match for {join(data_dir, '*'+p)}"
+        l = glob(join(data_dir, '*'+p)) #note : this means that variants2cell, variants and cells.metadata can all have any prefix
+        assert len(l)==1, f"There should be exaclty one match for {join(data_dir, '*'+p)}, {len(l)} found."
         paths.extend(l)
     return paths
 
@@ -320,6 +327,8 @@ def make_parser():
 
     parser.add_argument('--restart', action='store_true')
     parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
+    parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
+    parser.add_argument('--unseen-fraction', default=0.25, type=float, help='Fraction of unseen variants')
 
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
@@ -335,6 +344,7 @@ def make_parser():
     parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
+    parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If passed, do not rescale emebeddings to unit norm')
     # scheduler lr args
@@ -412,13 +422,20 @@ if __name__ == '__main__':
     # save args to file
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
+    # load variants to include
+    filt = None
+    if args.filter_variants is not None:
+        with open(args.filter_variants) as file:
+            filt = pd.read_csv(file, header=None).squeeze()
+            filt = filt.str.upper()
+            print(f'Filtering for {filt}')
     print()
     device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
-    paths = get_paths(args.data_path)
+    paths = get_paths(args.data_path, subset=args.data_subset)
     print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= args.group_synon,)
+    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt)
 
     ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn, verbosity=args.verbose)
-    main(args, counts)
+    main(args, counts, unseen_frac=args.unseen_fraction)
     
