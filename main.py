@@ -144,7 +144,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
     best_score = - np.inf
     for i in bar:
         bar.set_postfix({'i':i})
-        metrics_train = core_loop(train, model, loss_fn, optimizer, mode='train')
+        metrics_train = core_loop(train, model, loss_fn, ctx, optimizer, mode='train')
         write_metrics(metrics_train, writer, 'train', i)
         
         metrics_seen =  core_loop(test_seen, model, loss_fn, optimizer=None, mode='test', ctx=ctx)

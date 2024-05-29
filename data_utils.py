@@ -60,7 +60,7 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     if standardize:
         print('\t\tRemoving low variance genes and standardizing data')
         low_var_genes = counts.iloc[:,:-3].std()< EPS_STD
-        print('\t\t',(low_var_genes).sum(), f"genes with std < {EPS_STD:.1e} dropped")
+        print('\t\t',(low_var_genes).sum(), f"genes with std < {EPS_STD:.1e} dropped out of {len(counts.columns)-3}")
         counts = counts.drop(columns=low_var_genes[low_var_genes].index)
         counts.iloc[:,:-3] = (counts.iloc[:,:-3] - counts.iloc[:,:-3].mean())/counts.iloc[:,:-3].std()
 
