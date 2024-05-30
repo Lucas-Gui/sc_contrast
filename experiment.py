@@ -10,7 +10,7 @@ from time import sleep
 from typing import *
 from configparser import ConfigParser
 
-from hyperparam import PARAM_LIST, sample
+from hyperparam import PARAM_LIST, CONST_PARAMS, sample
 from main import Context, make_data, main, get_counts, make_dir_if_needed
 from contrastive_data import Data
 
@@ -37,10 +37,10 @@ def worker(name, worker_id, queue : mp.Queue):
                     See logs/{ctx.run_name}/{worker_id}.log for details.""")
     log.close()
 
-def make_task(param_list, data, i:int, main_ctx:Context)->Task:
+def make_task(param_list, const_params, data, i:int, main_ctx:Context,)->Task:
     '''Create the args namespace and the context and return a task for workers.
     Create the necessary directory and files.'''
-    param_dict = sample(param_list) # sample hyperparameters
+    param_dict = sample(param_list, const_params=const_params) # sample hyperparameters
     args = Namespace(**param_dict, name = f"{main_ctx.run_name}_{i}")
     run_dir = join(main_ctx.run_dir, f"{main_ctx.run_name}_{i}")
     # creating model dire and saving config
@@ -65,7 +65,7 @@ def main_f(args, data, main_ctx:Context):
     queue = mp.Queue(args.n_workers+1)
     # initialize queue
     for i in range(args.n_workers):
-        task = make_task(PARAM_LIST, data, i, main_ctx)
+        task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx)
         queue.put(task)
     # create workers
     workers = [
@@ -79,7 +79,7 @@ def main_f(args, data, main_ctx:Context):
     for i in range(args.n_workers, args.n_models):
         sleep(0.1)
         if not queue.empty():
-            task = make_task(PARAM_LIST, data, i, main_ctx)
+            task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx)
             queue.put(task) # copies everything except tensors, hopefully
     # send stop signal
     for i in range(args.n_workers):

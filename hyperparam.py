@@ -24,7 +24,6 @@ class _NumParam():
         if mode == 'pow2':
             self.type=int
 
-
 # class NumParamRange(_NumParam):
 #     @property
 #     def values(self, n):
@@ -138,21 +137,24 @@ PARAM_LIST = [ # ,  siamese only
     # FOR NABID DATA
     ConstParamSampler('unseen-fraction', 0),
     ConstParamSampler('data-subset', 'filtered'),
-    # ConstParamSampler('filter-variants','filt_nabid'),
     # CatParamSampler('mil-mode',['mean', 'attention']),
     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 ]
-def make_task(args)-> str:
-    pass
 
+CONST_PARAMS = { #Parameters that are constant for all models
+    # 'no-norm-embeds':'', #uncomment to not normalize embeddings
+    'filter-variants':'filt_nabid', #uncomment to use only R175H vs WT (2 classes)
 
-def sample(params, ):
+}
+
+def sample(params, const_params = {}):
     d = {}
     for p in params :
         d[p.name] = p.sample()
     # additional processing
     if d['task'] != 'siamese':
         d['loss'] = 'standard'
+    d.update(const_params)
     return d
 
 async def worker(name, worker_name, gen, path, load_split = True, overwrite = False):
@@ -162,7 +164,6 @@ async def worker(name, worker_name, gen, path, load_split = True, overwrite = Fa
     #python main.py ~/data/nabid_data/p53pilot/Data/RawData/filtered_feature_bc_matrix/wrangled/ test_nabid --dest-name nabid 
 
         cmd =  (f'python main.py {path} {task_name} --dest-name {name} --verbose 1 ' 
-                # +'--no-norm-embeds ' # !! to change if wanted
                 +' '.join([f'--{arg} {param}' for arg, param in params.items() ]))
         if overwrite:
             cmd += ' --overwrite'
@@ -194,8 +195,10 @@ async def worker(name, worker_name, gen, path, load_split = True, overwrite = Fa
 async def main_f(args):
     #TODO : create directories for everything so that first workers don't try to do it at the same time
     #TODO : add a checkpoint to wait for first worker to split data before starting the others
-    gen = ((args.name+f"_{i}", sample(PARAM_LIST), i) for i in range(args.i0, args.i0+args.n_models))
-    workers = [asyncio.create_task(worker(args.name, str(i), gen, args.path, overwrite=args.overwrite)) for i in range(args.n_workers)]
+    gen = ((args.name+f"_{i}", sample(PARAM_LIST, const_params=CONST_PARAMS), i) for i in range(args.i0, args.i0+args.n_models))
+    workers = []
+    for i in range(args.n_workers):
+        workers.append(asyncio.create_task(worker(args.name, str(i), gen, args.path, overwrite=args.overwrite)))
     await asyncio.gather(*workers)
 
 if __name__ == '__main__':
