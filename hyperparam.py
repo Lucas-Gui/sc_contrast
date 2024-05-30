@@ -119,21 +119,21 @@ class ShapeSampler():
 #     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 # ]
 
-PARAM_LIST = [ # ,  siamese only
-    NumParamSampler('lr', 1e-4, 1e-1, 'log'),
+PARAM_LIST = [ # nabid embed dim experiment
+    ConstParamSampler('lr',2e-3),
     ConstParamSampler('scheduler', 'restarts'),
     # NumParamSampler('patience',10,500, 'log', type=int),
-    NumParamSampler('cosine-t',50, 600, 'lin', type=int),
+    ConstParamSampler('cosine-t',90),
     ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
     # NumParamSampler('margin',0.5, 4, 'log'),
     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-    NumParamSampler('dropout', min_val=1e-3, max_val=0.1,mode='log'),
-    NumParamSampler('weight-decay', min_val=1e-5, max_val=1,mode='log'),
+    ConstParamSampler('dropout',0.0375),
+    ConstParamSampler('weight-decay',0.08),
     ConstParamSampler('batch-size', 512),
     # NumParamSampler('positive-fraction',0.4,0.6, 'logodds', ),
-    ShapeSampler('shape',4, 100, 1_000),
-    ConstParamSampler('embed-dim', 20),
-    CatParamSampler('task',[*main.config_dict.keys()]),
+    ConstParamSampler('shape','320 320'),
+    NumParamSampler('embed-dim', min_val=2, max_val=20, type=int),
+    ConstParamSampler('task','classifier'),
     ConstParamSampler('n-epochs', 200),
     # FOR NABID DATA
     ConstParamSampler('unseen-fraction', 0),
@@ -162,6 +162,7 @@ async def worker(name, worker_name, gen, path, load_split = True, overwrite = Fa
     #python main.py ~/data/nabid_data/p53pilot/Data/RawData/filtered_feature_bc_matrix/wrangled/ test_nabid --dest-name nabid 
 
         cmd =  (f'python main.py {path} {task_name} --dest-name {name} --verbose 1 ' 
+                # + '--filter-variants filt_nabid_2 ' #only for nabid data
                 # +'--no-norm-embeds ' # !! to change if wanted
                 +' '.join([f'--{arg} {param}' for arg, param in params.items() ]))
         if overwrite:
@@ -188,7 +189,7 @@ async def worker(name, worker_name, gen, path, load_split = True, overwrite = Fa
         print(f'Finished task {task_name} on worker {worker_name} after {dt.seconds // 60 }m {dt.seconds % 60}s.')
         if exit_code != 0:
            raise RuntimeError(f"""Error in task {task_name} on worker {worker_name} : exit code {exit_code}. 
-                              See logs/{task_name}/{worker_name}.log for details.""")
+                              See logs/{name}/{worker_name}.log for details.""")
     log.close()
 
 async def main_f(args):
