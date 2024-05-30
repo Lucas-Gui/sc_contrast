@@ -97,6 +97,7 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     First remove a x_var fraction of variants a unseen-class test set, 
     and then a x_cell fraction as a seen-class test set.
     Keep 'control' variant in training set.
+    Return three DataFrames for train, test seen and test unseen
     '''
     variants = data.loc[data.variant != 'control', 'variant'].unique() 
     # reorder categories such that codes 0 ... m-1 are in seen and m ... n-1 in unseen
@@ -120,9 +121,3 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     print(f"Categories in unseen : {test_unseen.variant.nunique()}")
  
     return train, test_seen, test_unseen
-
-
-
-
-    
-    

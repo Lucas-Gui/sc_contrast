@@ -59,13 +59,17 @@ bag_dataset_dict = {
 #   in order to limit the size of function calls/definitions
 
 @dataclass 
-class Context():
+class Context(): # defaults to None to allow for partial definition 
     device:str = 'cpu'
     run_dir:str = None
     run_name:str = None
     task:str = None
-    k_nn:int = 3
+    k_nn:int = 5
     verbosity:int = 3
+    index_dir :str = None
+    model_file:str = None
+    meta_file :str = None
+
 
 # ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
 
@@ -96,6 +100,19 @@ def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'p
         assert len(l)==1, f"There should be exaclty one match for {join(data_dir, '*'+p)}, {len(l)} found."
         paths.extend(l)
     return paths
+
+def get_counts(args):
+    '''Load data from args.data_path, and filter if args.filter_variants is not None.'''
+    paths = get_paths(args.data_path, subset=args.data_subset)
+    print(f'Loading data from {args.data_path}...', flush=True)
+    filt = None
+    if args.filter_variants is not None:
+        filt = pd.read_csv(args.filter_variants, header=None).squeeze()
+        filt = filt.str.upper()
+        print(f'Filtering for {filt.values}')
+    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
+                       standardize=args.data_subset != 'processed')
+    return counts
 
 def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True,
                ) -> List[pd.DataFrame]:
@@ -132,7 +149,7 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
 
 
         
-def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file,
+def train_model(train, test_seen, test_unseen, model, run_meta, 
                 loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler, writer:SummaryWriter,
                 ctx:Context, n_epoch=10_000, 
                  ):
@@ -166,9 +183,9 @@ def train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta
             metrics_unseen = core_loop(test_unseen, model, loss_fn, optimizer=None, mode='test', unseen=True)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
-        torch.save(model, model_file)
+        torch.save(model, ctx.model_file)
         run_meta['i'] = i
-        with open(meta_file, 'w') as file:
+        with open(ctx.meta_file, 'w') as file:
             json.dump(run_meta, file, sort_keys=True, indent=2)
     writer.flush()
 
@@ -229,40 +246,48 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
         })
     return metrics
 
-
-def main(args, counts, ctx:Context, unseen_frac = 0.25):
-    print(f"{run_dir=}")
-
-    index_dir = join(run_dir, 'split')
-    model_file = join(run_dir,'model.pkl')
-    meta_file = join(run_dir, 'meta.json')
-
+def make_data(args, counts, ctx:Context, ):
+    '''
+    Load the data, split it, and convert it to a Data class containing torch Tensors
+    '''
     config = config_dict[args.task]
     if args.bag_size >= 1:
         try : 
             config.dataset_class = bag_dataset_dict[args.task]
         except KeyError:
             raise NotImplementedError(f'Bagging is not implemented for task {args.task}')
-     
     if args.restart : #load model and split
-        dataframes = load_split(index_dir, counts)
-        print(f'Loading model from {model_file}')
-        model = torch.load(model_file)
-        with open(meta_file, 'r') as file:
-            run_meta = json.load(file) # data that we want to keep between restarts
+        dataframes = load_split(ctx.index_dir, counts)     
     else:
         if args.load_split is not None:
             print(f'Copying split from {args.load_split}')
             dataframes = load_split(join('models',args.load_split,'split'), counts)
         else:
-            dataframes = split(counts, x_var=unseen_frac) #random split
+            dataframes = split(counts, x_var=args.unseen_frac) #random split
+        pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(ctx.index_dir, 'categories.csv')) #save category order
+    data_containers = []
+    for i, df in enumerate(dataframes):
+        df = pd.DataFrame(index=df.index).reset_index()
+        df.to_csv(join(ctx.index_dir,f'index_{i}.csv'))
+        data_containers.append(Data(df, device=ctx.device))
+    del dataframes # free memory
+    # del counts #TODO : check if this won't cause problems
+    return data_containers
+
+def main(args, data_containers:List[Data], ctx:Context):
+    print(f"{run_dir=}")
+    config = config_dict[args.task]
+    if args.restart : #load model and split
+        print(f'Loading model from {ctx.model_file}')
+        model = torch.load(ctx.model_file)
+        with open(ctx.meta_file, 'r') as file:
+            run_meta = json.load(file) # data that we want to keep between restarts
+
         # save split
-        make_dir_if_needed(index_dir)
-        for i, df in enumerate(dataframes):
-            df = pd.DataFrame(index=df.index).reset_index()
-            df.to_csv(join(index_dir,f'index_{i}.csv'))
-        pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(index_dir, 'categories.csv')) #save category order
-        in_shape = dataframes[0].shape[1]-3
+        make_dir_if_needed(ctx.index_dir)
+        n_class = data_containers[0].variants.nunique()
+        in_shape = data_containers[0].x.shape[1]
+        
         inner_network = MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim, normalize= not args.no_norm_embeds,)
         if args.bag_size >= 1:
@@ -276,18 +301,16 @@ def main(args, counts, ctx:Context, unseen_frac = 0.25):
         model = config.model_class(
                inner_network, 
             #task-specific kwargs
-            n_class = dataframes[0]['variant'].nunique() # should be equal to nb of codes 
+            n_class = n_class # should be equal to nb of codes 
                             ).to(ctx.device)
         run_meta = {
             'i':0,
         }
     train, test_seen, test_unseen = make_loaders(
-        *dataframes, batch_size=args.batch_size, n_workers=args.n_workers, 
+        *data_containers, batch_size=args.batch_size, n_workers=args.n_workers, 
          dataset_class=config.dataset_class, dataset_kwargs={'bag_size':args.bag_size},
         device=ctx.device)
     in_shape = next(iter(train))[0][0].shape[1]
-
-
     print(model)
     loss_fn = config.loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -303,7 +326,7 @@ def main(args, counts, ctx:Context, unseen_frac = 0.25):
     
     writer = SummaryWriter(join('runs',args.dest_name,run_name))
 
-    train_model(train, test_seen, test_unseen, model, run_meta, model_file, meta_file, 
+    train_model(train, test_seen, test_unseen, model, run_meta,
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
                 n_epoch=args.n_epochs, ctx=ctx
                 )
@@ -367,36 +390,24 @@ def make_parser():
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
     parser.add_argument('--cpu', help='Run on cpu even if gpu is available', action='store_true')
     return parser
-    
 
-if __name__ == '__main__':
-
-    parser = make_parser()
-    args = parser.parse_args()
-
- 
-    run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
-    run_name = args.run_name if not args.run_test else 'TEST' 
-
-
-    # run test
-    if args.run_test:
-        test(args)
-        print('Test concluded.')
-        sys.exit()
-
-    sources = parser._source_to_settings
+IGNORE_ARGS_CONFIG = ['restart']
+def file_config_ignore(args, sources):
+    '''
+    Update args to ignore the values of some arguments when passed from a file
+    '''
     # ignore some arguments if they come from a file
     # iiuc, configargparse will store key in _source_to_setting.config ONLY if it not superseded by a CL arg
-    for arg in ['restart']:
-        for key  in sources.keys():
+    for arg in IGNORE_ARGS_CONFIG:
+        for key in sources.keys():
             if key.startswith('config_file'):
                 if sources[key].get(arg) is not None :
                     value = sources[key][arg][0].default
                     print(f'Ignoring argument {arg} with value {args.__dict__[arg]} from {key}, setting to default value {value}')
                     args.__dict__[arg] = value
 
-    # argument compatibility check
+def args_check(args, sources):
+    '''argument compatibility check'''
     if args.restart:
         for arg in ['shape','embed_dim']:
             if sources['command_line'].get(arg) is not None:
@@ -407,7 +418,23 @@ if __name__ == '__main__':
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
     if args.task in ['classifier'] and args.alpha : 
         raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
+      
+if __name__ == '__main__':
+    parser = make_parser()
+    args = parser.parse_args()
+    run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
+    run_name = args.run_name if not args.run_test else 'TEST' 
+    # run test
+    if args.run_test:
+        test(args)
+        print('Test concluded.')
+        sys.exit()
     
+    # args check and config file filtering
+    sources = parser._source_to_settings
+    file_config_ignore(args, sources)
+    args_check(args, sources)
+
     # safety overwriting check
     if os.path.exists(join(run_dir, 'config.ini')) and not args.restart and not args.overwrite:
         check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n] ')
@@ -424,19 +451,18 @@ if __name__ == '__main__':
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     # load variants to include
-    filt = None
-    if args.filter_variants is not None:
-        filt = pd.read_csv(args.filter_variants, header=None).squeeze()
-        filt = filt.str.upper()
-        print(f'Filtering for {filt.values}')
+
     print()
     device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
-    paths = get_paths(args.data_path, subset=args.data_subset)
-    print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
-                       standardize=args.data_subset != 'processed')
-
-    ctx = Context(device, run_dir, run_name, task=args.task, k_nn=args.knn, verbosity=args.verbose)
-    main(args, counts, unseen_frac=args.unseen_fraction, ctx=ctx)
+    counts = get_counts(args)
+    ctx = Context(
+        device, run_dir, run_name, task=args.task, k_nn=args.knn, 
+        verbosity=args.verbose,
+        index_dir = join(run_dir, 'split'),
+        model_file = join(run_dir,'model.pkl'),
+        meta_file = join(run_dir, 'meta.json'),
+    )
+    data = make_data(args, counts, ctx)
+    main(args, data, ctx=ctx)
     
