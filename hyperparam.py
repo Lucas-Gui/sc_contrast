@@ -142,7 +142,7 @@ PARAM_LIST = [ # ,  siamese only
 ]
 
 CONST_PARAMS = { #Parameters that are constant for all models
-    # 'no-norm-embeds':'', #uncomment to not normalize embeddings
+    # 'no-norm-embeds':True, #uncomment to not normalize embeddings
     'filter-variants':'filt_nabid', #uncomment to use only R175H vs WT (2 classes)
 
 }
