@@ -59,16 +59,16 @@ bag_dataset_dict = {
 #   in order to limit the size of function calls/definitions
 
 @dataclass 
-class Context():
+class Context(): # defaults to None to allow for partial definition 
     device:str = 'cpu'
     run_dir:str = None
     run_name:str = None
     task:str = None
-    k_nn:int = 3
+    k_nn:int = 5
     verbosity:int = 3
-    index_dir :str
-    model_file:str
-    meta_file :str
+    index_dir :str = None
+    model_file:str = None
+    meta_file :str = None
 
 
 # ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
@@ -100,6 +100,19 @@ def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'p
         assert len(l)==1, f"There should be exaclty one match for {join(data_dir, '*'+p)}, {len(l)} found."
         paths.extend(l)
     return paths
+
+def get_counts(args):
+    '''Load data from args.data_path, and filter if args.filter_variants is not None.'''
+    paths = get_paths(args.data_path, subset=args.data_subset)
+    print(f'Loading data from {args.data_path}...', flush=True)
+    filt = None
+    if args.filter_variants is not None:
+        filt = pd.read_csv(args.filter_variants, header=None).squeeze()
+        filt = filt.str.upper()
+        print(f'Filtering for {filt.values}')
+    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
+                       standardize=args.data_subset != 'processed')
+    return counts
 
 def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True,
                ) -> List[pd.DataFrame]:
@@ -377,36 +390,24 @@ def make_parser():
     parser.add_argument('--run-test', help='Run test on reduced data', action='store_true')
     parser.add_argument('--cpu', help='Run on cpu even if gpu is available', action='store_true')
     return parser
-    
 
-if __name__ == '__main__':
-
-    parser = make_parser()
-    args = parser.parse_args()
-
- 
-    run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
-    run_name = args.run_name if not args.run_test else 'TEST' 
-
-
-    # run test
-    if args.run_test:
-        test(args)
-        print('Test concluded.')
-        sys.exit()
-
-    sources = parser._source_to_settings
+IGNORE_ARGS_CONFIG = ['restart']
+def file_config_ignore(args, sources):
+    '''
+    Update args to ignore the values of some arguments when passed from a file
+    '''
     # ignore some arguments if they come from a file
     # iiuc, configargparse will store key in _source_to_setting.config ONLY if it not superseded by a CL arg
-    for arg in ['restart']:
-        for key  in sources.keys():
+    for arg in IGNORE_ARGS_CONFIG:
+        for key in sources.keys():
             if key.startswith('config_file'):
                 if sources[key].get(arg) is not None :
                     value = sources[key][arg][0].default
                     print(f'Ignoring argument {arg} with value {args.__dict__[arg]} from {key}, setting to default value {value}')
                     args.__dict__[arg] = value
 
-    # argument compatibility check
+def args_check(args, sources):
+    '''argument compatibility check'''
     if args.restart:
         for arg in ['shape','embed_dim']:
             if sources['command_line'].get(arg) is not None:
@@ -417,7 +418,23 @@ if __name__ == '__main__':
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
     if args.task in ['classifier'] and args.alpha : 
         raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
+      
+if __name__ == '__main__':
+    parser = make_parser()
+    args = parser.parse_args()
+    run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
+    run_name = args.run_name if not args.run_test else 'TEST' 
+    # run test
+    if args.run_test:
+        test(args)
+        print('Test concluded.')
+        sys.exit()
     
+    # args check and config file filtering
+    sources = parser._source_to_settings
+    file_config_ignore(args, sources)
+    args_check(args, sources)
+
     # safety overwriting check
     if os.path.exists(join(run_dir, 'config.ini')) and not args.restart and not args.overwrite:
         check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n] ')
@@ -434,19 +451,11 @@ if __name__ == '__main__':
     parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     # load variants to include
-    filt = None
-    if args.filter_variants is not None:
-        filt = pd.read_csv(args.filter_variants, header=None).squeeze()
-        filt = filt.str.upper()
-        print(f'Filtering for {filt.values}')
+
     print()
     device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
-    paths = get_paths(args.data_path, subset=args.data_subset)
-    print(f'Loading data from {args.data_path}...', flush=True)
-    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
-                       standardize=args.data_subset != 'processed')
-
+    counts = get_counts(args)
     ctx = Context(
         device, run_dir, run_name, task=args.task, k_nn=args.knn, 
         verbosity=args.verbose,
@@ -455,5 +464,5 @@ if __name__ == '__main__':
         meta_file = join(run_dir, 'meta.json'),
     )
     data = make_data(args, counts, ctx)
-    main(args, data, unseen_frac=args.unseen_fraction, ctx=ctx)
+    main(args, data, ctx=ctx)
     
