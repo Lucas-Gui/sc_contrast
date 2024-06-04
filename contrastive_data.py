@@ -11,28 +11,112 @@ class Data():
     Lives in the main process, will be passed to the queue to be made into the appropriate DataLoader
     by the worker processes. 
     '''
-    def __init__(self, df:pd.DataFrame, device) -> None:
+    cats : pd.Categorical
+    cycle_cats : pd.Categorical
+    x : Tensor
+    y : Tensor
+    cycle : Tensor
+    cell_ids : pd.DataFrame
+    variants : pd.Series
+
+    def __init__(self, x,y,cycle, cats,cycle_cats, cell_ids,variants ) -> None:
+        self.x =x
+        self.y = y
+        self.cycle = cycle
+        self._cats = cats
+        self.cycle_cats = cycle_cats
+        self.cell_ids = cell_ids
+        self._variants = variants
+    # safety against changing categories after y has been computed
+    @property
+    def cats(self):
+        return self._cats
+    @cats.setter
+    def cats(self, value):
+        if self.y is not None:
+            raise ValueError('Cannot change categories if y is not None')
+        self._cats = value
+
+    @property
+    def variants(self):
+        return self._variants
+    @variants.setter
+    def variants(self, value):
+        if self.y is not None:
+            raise ValueError('Cannot change categories if y is not None')
+        self._variants = value
+    
+    def __len__(self):
+        return len(self._variants)
+
+    @classmethod 
+    def from_df(cls, df:pd.DataFrame, device='cpu') -> Self:
         '''
-        Initialize data for a dataset from a dataframe.
+        Initialize data for a dataset from a counts dataframe.
         Convert variant and cycle to labels and store categories.
         Yield ((n examples), (n labels) pairs)
         '''
-        variants = df['variant']
-        self.cats = variants.cat.categories.copy() # seen variants are first
-        self.cycle_cats = df['cycle'].cat.categories.copy()
-        self.cycle = torch.tensor(
+        cats = df.variant.cat.categories.copy() # seen variants are first
+        cycle_cats = df['cycle'].cat.categories.copy()
+        cycle = torch.tensor(
             df['cycle'].cat.codes.to_numpy(), dtype=int, device=device
         )
-        self.x = torch.tensor(
+        x = torch.tensor(
                 df.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
             dtype=torch.float32, device=device)
-        self.y = torch.tensor(
-            variants.cat.codes.to_numpy(), dtype=int, device=device
-        )
+        y = None
         # for instance bag datasets # TODO : make sure this is not an issue, otherwise move in child class
         # cell_ids : bc df indexes are cell barcodes
-        self.cell_ids = pd.DataFrame(np.arange(len(df)), index = df.index.copy(), columns=['ids'])  
-        self.variants = variants.copy() # to be able to group by
+        cell_ids = pd.DataFrame(np.arange(len(df)), index = df.index.copy(), columns=['ids'])  
+        variants = df.variant.copy() # to be able to group by
+        data = cls(x,y,cycle, cats,cycle_cats, cell_ids, variants)
+        return data
+    
+    def subset(self, index, drop_cats = False) -> Self:
+        '''
+        Create a new Data instance referring to a subset of the data.
+        index should be a boolean mask (either an array or a series indexed by cell ids).
+        If drop_cats, unused categories will be dropped from the categories.
+        '''
+        data = Data(
+            self.x[index],
+            self.y[index] if self.y is not None else None,
+            self.cycle[index],
+            self.cats,
+            self.cycle_cats,
+            self.cell_ids.loc[index],
+            self.variants.loc[index]
+        )
+        if drop_cats:
+            if self.y is None:
+                data.variants = data.variants.cat.remove_unused_categories()
+                data.cats = data.variants.cat.categories
+            else:
+                raise ValueError('Cannot drop categories if y is not None')
+        return data
+    
+    def compute_y(self):
+        '''
+        Compute y tensor from the variant categories.
+        Separated from constructor to allow category reordering and subsampling.
+        '''
+        device = self.x.device
+        self.y = torch.tensor(
+            self.variants.cat.codes.to_numpy(), dtype=int, device=device
+        )
+
+    # def subsample_variants(self, n) -> Self:
+    #     '''
+    #     Filter Data tensors in-place to keep only n variants.
+    #     '''
+    #     variants = self.variants.cat.categories
+    #     variants = np.random.choice(variants,replace=False, size = n )
+    #     filt = self.variants.isin(variants)
+    #     self.x = self.x[filt]
+    #     self.y = self.y[filt]
+    #     self.cycle = self.cycle[filt]
+    #     self.cell_ids = self.cell_ids[filt]
+
 
 class _DfDataset(Dataset):
     def __init__(self, data:Data, **kwargs) -> None:
