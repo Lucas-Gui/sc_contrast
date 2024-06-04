@@ -17,14 +17,12 @@ from contrastive_data import Data
 ## CHANGE hyperparam.py TO CHANGE EXPERIMENT PARAMETERS
 
 ## MULTIPROCESSING CODE
-Task = Tuple[Namespace, Data, Context]
+Task = Tuple[Namespace, Data, Context,]
 
-def worker(name, worker_id, queue : mp.Queue):
-    '''Worker process that runs a model and sends back the results'''
+def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
+    '''worker function that runs a model and sends back the results'''
     log = open(f'logs/{name}/{worker_id}.log', 'w')
-    task : Task
-    for task in iter(queue.get, None): # iterates until None is sent
-        args, data, ctx = task 
+    for args, data, ctx in iter(queue.get, None): # iterates until None is sent
         t = datetime.now()
         print(f'Starting task {ctx.run_name} on worker {worker_id} at time {t.strftime("%d/%m %H:%M")}.')
         log.write(f'Task {ctx.run_name}\n')
@@ -119,4 +117,7 @@ if __name__ == '__main__':
         verbosity = 1,
         index_dir = join(parent_model_dir, 'split'),
     )
-    data = make_data(args, counts, main_ctx)
+    data = Data.from_df(counts, device=device)
+    if args.shared_random_split:
+        split_data(data, main_ctx, restart=False, load_split_path=None, unseen_frac=args.unseen_frac)
+    main_f(args, data, main_ctx, split_policy=split_policy)

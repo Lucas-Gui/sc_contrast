@@ -312,7 +312,7 @@ class CycleClassifierDataset(_DfDataset):
     def __getitem__(self, index) -> Any:
         return (self.x[index],), (self.y[index], self.cycle[index]) 
 
-def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
+def make_loaders(*dfs:Data, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
                  dataset_kwargs={},
                  n_workers = 8, device='cpu') -> Tuple[DataLoader]:
     '''

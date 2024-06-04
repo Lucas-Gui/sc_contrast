@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from contextlib import nullcontext
 
 import pprint
-# config 
+# config : task -> loss, model, dataset
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
     'standard':SiameseLoss,
@@ -70,7 +70,6 @@ class Context(): # defaults to None to allow for partial definition
     model_file:str = None
     meta_file :str = None
 
-
 # ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
 
 def make_dir_if_needed(path):
@@ -79,8 +78,7 @@ def make_dir_if_needed(path):
     else:
         if not os.path.isdir(path):
             raise FileExistsError(path)
-    
-
+        
 def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'processed'): # TODO move to data_utils
     '''
     Reads and returns, in that order :
@@ -114,30 +112,56 @@ def get_counts(args):
                        standardize=args.data_subset != 'processed')
     return counts
 
-def load_split(index_dir, counts:pd.DataFrame, reorder_categories = True,
+def load_split_df(index_dir, counts:pd.DataFrame, reorder_categories = True,
                ) -> List[pd.DataFrame]:
-        '''
-        If reorder_categories, use saved category order and drop unused categories. This is important for classifier models,
-        as category order defines the label.
-        Set it to false if the categories are not the same as during training ("control" split into individual variants, for example)
-        '''
-        i = 0
-        dataframes = []          
-        if reorder_categories:
-            cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
-            counts = counts[counts['variant'].isin(cat)].copy() # drop unused variants
-            counts['variant'] = counts.variant.cat.remove_unused_categories().cat.reorder_categories(cat)
-        else:
-            warn('Not reordering categories will lead to wrong classifier prediction')
-        while os.path.isfile(join(index_dir, f'index_{i}.csv')):
-            idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
-            dataframes.append(counts.loc[idx])
-            i+=1
-        print(', '.join([str(df.shape[0]) for df in dataframes]) + ' exemples in data')
-        print(f"{dataframes[0].variant.nunique()} variants in train")
-        print(f"{dataframes[2].variant.nunique()} variants in unseen")
+    '''
+    If reorder_categories, use saved category order and drop unused categories. This is important for classifier models,
+    as category order defines the label.
+    Set it to false if the categories are not the same as during training ("control" split into individual variants, for example)
+    '''
+    i = 0
+    dataframes = []          
+    if reorder_categories:
+        cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
+        counts = counts[counts['variant'].isin(cat)].copy() # drop unused variants
+        counts['variant'] = counts.variant.cat.remove_unused_categories().cat.reorder_categories(cat)
+    else:
+        warn('Not reordering categories will lead to wrong classifier prediction')
+    while os.path.isfile(join(index_dir, f'index_{i}.csv')):
+        idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
+        dataframes.append(counts.loc[idx])
+        i+=1
+    print(', '.join([str(df.shape[0]) for df in dataframes]) + ' exemples in data')
+    print(f"{dataframes[0].variant.nunique()} variants in train")
+    print(f"{dataframes[2].variant.nunique()} variants in unseen")
 
-        return dataframes
+    return dataframes
+
+def load_split(index_dir, data:Data, reorder_categories = True,
+               ) -> List[Data]:
+    '''
+    If reorder_categories, use saved category order and drop unused categories. This is important for classifier models,
+    as category order defines the label.
+    Set it to false if the categories are not the same as during training ("control" split into individual variants, for example)
+    '''
+    i = 0
+    containers = []          
+    if reorder_categories:
+        cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
+        data = data.subset(data.variants.isin(cat)) # drop unused variants
+        data.variants = data.variants.cat.remove_unused_categories().cat.reorder_categories(cat)
+    else:
+        warn('Not reordering categories will lead to wrong classifier prediction')
+    parent_idx = data.variants.index
+    while os.path.isfile(join(index_dir, f'index_{i}.csv')):
+        idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
+        containers.append(data.subset(parent_idx.isin(idx)))
+        i+=1
+    print(', '.join([str(len(data)) for data in containers]) + ' exemples in data')
+    print(f"{containers[0].variants.nunique()} variants in train")
+    print(f"{containers[2].variants.nunique()} variants in unseen")
+
+    return containers
 
 def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_tag:str, i):
     for tag, metric_or_dict in metrics.items():
@@ -148,7 +172,6 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
                 writer.add_scalar(f'{main_tag}/{tag}', metric_or_dict, i)
 
 
-        
 def train_model(train, test_seen, test_unseen, model, run_meta, 
                 loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler, writer:SummaryWriter,
                 ctx:Context, n_epoch=10_000, 
@@ -246,10 +269,42 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
         })
     return metrics
 
-def make_data(args, counts, ctx:Context, ):
+def split_data(data:Data, ctx:Context, restart, load_split_path=None, unseen_frac=0.25, cell_frac=0.25 ):
     '''
-    Load the data, split it, and convert it to a Data class containing torch Tensors
+    Split the data into train, test_seen and test_unseen.
+    If restart, load split from index dir
+    If load_split_path is not None, load split from that directory
+    Otherwise, create a new split.
+    In all cases, save the indices to ctx.index_dir
     '''
+    if restart : #load model and split
+        containers = load_split(ctx.index_dir, data)     
+    else:
+        if load_split_path is not None:
+            print(f'Copying split from {load_split_path}')
+            containers = load_split(load_split_path, data)
+        else:
+            print('Creating new data split')
+            containers = split(data, x_var=unseen_frac, x_cell=cell_frac) #random split
+        make_dir_if_needed(ctx.index_dir)
+        pd.DataFrame(containers[0].variants.cat.categories).to_csv(join(ctx.index_dir, 'categories.csv')) #save category order
+    for i, d in enumerate(containers):
+        if d is not None:
+            df = pd.DataFrame(index=d.variants.index).reset_index()
+        else:
+            df = pd.DataFrame(columns=['index'])
+        df.to_csv(join(ctx.index_dir,f'index_{i}.csv'))
+    return containers
+
+def main(args, data:Data, ctx:Context):
+    print(f"{ctx.run_dir=}")
+    # split data
+    data_containers = split_data(
+        data, ctx, args.restart, args.load_split, args.unseen_frac)
+    for data in data_containers:
+        if data is not None:
+            data.compute_y() # freeze y once variants are set
+    # get loss/model/dataset classes for task
     config = config_dict[args.task]
     if args.bag_size >= 1:
         try : 
@@ -257,37 +312,15 @@ def make_data(args, counts, ctx:Context, ):
         except KeyError:
             raise NotImplementedError(f'Bagging is not implemented for task {args.task}')
     if args.restart : #load model and split
-        dataframes = load_split(ctx.index_dir, counts)     
-    else:
-        if args.load_split is not None:
-            print(f'Copying split from {args.load_split}')
-            dataframes = load_split(join('models',args.load_split,'split'), counts)
-        else:
-            dataframes = split(counts, x_var=args.unseen_frac) #random split
-        pd.DataFrame(dataframes[0].variant.cat.categories).to_csv(join(ctx.index_dir, 'categories.csv')) #save category order
-    data_containers = []
-    for i, df in enumerate(dataframes):
-        df = pd.DataFrame(index=df.index).reset_index()
-        df.to_csv(join(ctx.index_dir,f'index_{i}.csv'))
-        data_containers.append(Data(df, device=ctx.device))
-    del dataframes # free memory
-    # del counts #TODO : check if this won't cause problems
-    return data_containers
-
-def main(args, data_containers:List[Data], ctx:Context):
-    print(f"{run_dir=}")
-    config = config_dict[args.task]
-    if args.restart : #load model and split
         print(f'Loading model from {ctx.model_file}')
         model = torch.load(ctx.model_file)
         with open(ctx.meta_file, 'r') as file:
             run_meta = json.load(file) # data that we want to keep between restarts
-
-        # save split
-        make_dir_if_needed(ctx.index_dir)
+    else:
+        # make new model
         n_class = data_containers[0].variants.nunique()
         in_shape = data_containers[0].x.shape[1]
-        
+        print(f'{n_class} classes, {in_shape} features\n', flush=True)
         inner_network = MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim, normalize= not args.no_norm_embeds,)
         if args.bag_size >= 1:
@@ -463,6 +496,6 @@ if __name__ == '__main__':
         model_file = join(run_dir,'model.pkl'),
         meta_file = join(run_dir, 'meta.json'),
     )
-    data = make_data(args, counts, ctx)
-    main(args, data, ctx=ctx)
+    data = Data.from_df(_counts, device=_device)
+    main(args, data, ctx=ctx, )
     

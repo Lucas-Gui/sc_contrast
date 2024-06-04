@@ -1,6 +1,9 @@
 import gzip
 import pandas as pd
 import numpy as np
+from contrastive_data import Data
+from os.path import join
+import os
 
 EPS_STD = 1e-3
 
@@ -92,7 +95,7 @@ def check_mtx_columns(counts:pd.DataFrame, genes:pd.Series, cells:pd.Series):
         print(counts.cell.max())
         raise ValueError('Gene file does not match mtx file')
 
-def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sample ?
+def split_dataframes(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sample ?
     '''
     First remove a x_var fraction of variants a unseen-class test set, 
     and then a x_cell fraction as a seen-class test set.
@@ -113,7 +116,7 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
         test_unseen = data[data['variant'].isin(test_vars)]
     train = data[~data['variant'].isin(test_vars)]
     test_seen = train.sample(frac=x_cell, replace=False)
-    train = train.loc[train.index.difference(test_seen.index)]
+    train = train.loc[train.index.difference(test_seen.index)] #also sort cells in train by tag lexical order, but that's okay
     print(f"Train length: {len(train)}")
     print(f"Seen test length  : {len(test_seen)}")
     print(f"Unseen test length: {len(test_unseen)}")
@@ -121,3 +124,42 @@ def split(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : groupby sampl
     print(f"Categories in unseen : {test_unseen.variant.nunique()}")
  
     return train, test_seen, test_unseen
+
+def split(data:Data, x_cell=0.25, x_var=0.25):
+    '''
+    First remove a x_var fraction of variants a unseen-class test set, 
+    and then a x_cell fraction as a seen-class test set.
+    Keep 'control' variant in training set.
+    Return three Data objects for train, test seen and test unseen
+    '''
+    variants = data.variants[data.variants != 'control'].unique()
+    # reorder categories such that codes 0 ... m-1 are in seen and m ... n-1 in unseen
+    variants = np.random.permutation(variants)
+    if 'control' in data.variants.cat.categories:
+        variants = np.concatenate((np.array(['control']), variants))
+    data.variants = data.variants.cat.reorder_categories(variants)
+    if x_var == 0:
+        test_vars = []
+        unseen = None #make an empty Data instead ?
+        filt_unseen = pd.Series(False, index=data.variants.index)
+    else:
+        test_vars = variants[-int(len(variants)*x_var):]
+        filt_unseen = data.variants.isin(test_vars)
+        unseen = data.subset(filt_unseen)
+    # randomly select x_cell fraction of cells for seen test set
+    filt_seen = pd.Series(
+        np.random.rand(len(data.variants)) < x_cell, 
+        index=data.variants.index
+        )
+    # remove cells in seen and train from unseen
+    filt_train = ~filt_seen & ~filt_unseen
+    filt_seen = filt_seen & ~filt_unseen
+    seen = data.subset(filt_seen)
+    train = data.subset(filt_train)
+    print(f"Train length: {len(train)}")
+    print(f"Seen test length  : {len(seen)}")
+    if unseen is not None:
+        print(f"Unseen test length: {len(unseen)}")
+    else :
+        print("No unseen test set") 
+    return train, seen, unseen
