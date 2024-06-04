@@ -14,6 +14,16 @@ from configparser import ConfigParser
 from hyperparam import PARAM_LIST, CONST_PARAMS, sample
 from main import Context, main, get_counts, make_dir_if_needed, config_dict, make_parser, split_data
 from contrastive_data import Data
+from enum import Enum
+
+# args that are defined by user during command invocation 
+# and should be passed to workers
+OVERRIDE_ARGS = [ 'overwrite', 'restart'] # 'load_split','unseen_frac',
+class SplitPolicy(Enum):
+    SHARED_RANDOM = 1 # save a random split to experiment directory and load it for all models
+    LOAD_ALL = 2 # load a split from a given directory for all models
+    LOAD_EACH = 3 # load a split from the model directory
+    RANDOM = 4 # create a new random split for each model
 
 ## CHANGE hyperparam.py TO CHANGE EXPERIMENT PARAMETERS
 
@@ -25,63 +35,92 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
     log = open(f'logs/{name}/{worker_id}.log', 'w')
     for args, data, ctx in iter(queue.get, None): # iterates until None is sent
         t = datetime.now()
-        print(f'Starting task {ctx.run_name} on worker {worker_id} at time {t.strftime("%d/%m %H:%M")}.')
+        print(f'Starting task {ctx.run_name} on worker {worker_id} at time {t.strftime("%d/%m %H:%M")}.',
+            f'Logging to logs/{name}/{worker_id}.log')
         log.write(f'Task {ctx.run_name}\n')
-        try : 
-            with redirect_stderr(log), redirect_stdout(log):
-                main(args, data, ctx, )
-        except Exception as e:
-            print(e)
-            raise RuntimeError(f"""Error in task {ctx.run_name} on worker {worker_id}. 
-                    See logs/{ctx.run_name}/{worker_id}.log for details.""")
+        log.write(str(args))
+        with redirect_stderr(log), redirect_stdout(log):
+            main(args, data, ctx,  )
+        # except Exception as e:
+        #     print(e)
+        #     raise RuntimeError(f"""Error in task {ctx.run_name} on worker {worker_id}. 
+        #             See logs/{name}/{worker_id}.log for details.""")
     log.close()
 
-def make_task(param_list, const_params, data, i:int, main_ctx:Context,)->Task:
-    '''Create the args namespace and the context and return a task for workers.
-    Create the necessary directory and files.'''
-    param_dict = sample(param_list, const_params=const_params) # sample hyperparameters
-    args = Namespace(**param_dict, name = f"{main_ctx.run_name}_{i}")
+def make_task(param_list, const_params, data, i:int, main_ctx:Context, split_policy)->Task:
+    '''
+    Create the args namespace and the context and return a task for workers.
+    Create the necessary directory and files.
+    Handles the splitting policy by modifying the load_split argument.
+    '''
+    print(f"{split_policy=}")
     run_dir = join(main_ctx.run_dir, f"{main_ctx.run_name}_{i}")
     # creating model dire and saving config
     make_dir_if_needed(run_dir)
-    config = ConfigParser().read_dict({'':param_dict})
+    # sampling run arguments and populating args Namespace
+    param_dict = sample(param_list, const_params ) # sample hyperparameters
+    match split_policy:
+        case SplitPolicy.SHARED_RANDOM | SplitPolicy.LOAD_ALL:
+            param_dict['load_split'] = main_ctx.index_dir
+        case SplitPolicy.LOAD_EACH:
+            param_dict['load_split'] = f"{main_ctx.run_name}/{main_ctx.run_name}_{i}"
+        case SplitPolicy.RANDOM:
+            pass # already None
+    args = make_parser().parse_args(['N/A',  f"{main_ctx.run_name}_{i}"]) # default args
+    for key, value in param_dict.items(): # update args with hyperparameters
+        setattr(args, key, value)
     with open(join(run_dir, 'config.ini'), 'w') as f:
-        config.write(f)
+        param_cfg = ConfigParser()
+        pprint(param_dict)
+        param_cfg.read_dict({'':(param_dict)})
+        param_cfg.write(f)
     ctx = Context(
         main_ctx.device, 
         run_dir=run_dir,
         run_name= f"{main_ctx.run_name}_{i}",
         verbosity = 1,
         task=args.task, k_nn=args.knn,
-        index_dir=main_ctx.index_dir,
+        index_dir=join(run_dir, 'split'),
         model_file=join(run_dir, 'model.pkl'),
         meta_file=join(run_dir, 'meta.json')
     )
-    return (args, data, ctx)
+    return (args, data, ctx, )
 
-def main_f(args, data, main_ctx:Context):
+def main_f(args, data, main_ctx:Context, split_policy:SplitPolicy):
     '''Main function that creates workers and sends them tasks'''
     queue = mp.Queue(args.n_workers+1)
+    i0 = args.i0
+    for arg in OVERRIDE_ARGS:
+        try :
+            _ = CONST_PARAMS[arg]
+        except KeyError:
+            pass
+        else:
+            print("Warning : overriding ", arg, getattr(args, arg), "from CONST_PARAMS in hyperparam.py.")
+        CONST_PARAMS[arg] = getattr(args, arg)
+
     # initialize queue
-    for i in range(args.n_workers):
-        task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx)
+    for i in range(i0, i0+args.n_workers):
+        task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx, split_policy=split_policy)
         queue.put(task)
     # create workers
     workers = [
-        mp.Process(target=worker, args=(main_ctx.run_name,i,queue,)) 
+        mp.Process(target=worker_f, args=(main_ctx.run_name,i,queue,), name=f'worker_{i}') 
             for i in range(args.n_workers)
             ]
     # start workers
     for w in workers:
         w.start()
     # keep generating tasks until all are done
-    for i in range(args.n_workers, args.n_models):
+    for i in range(i0+args.n_workers, i0+args.n_models):
         sleep(0.1)
         if not queue.empty():
-            task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx)
+            task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx, split_policy=split_policy)
             queue.put(task) # copies everything except tensors, hopefully
+        # check if any process have raised exceptions
+
     # send stop signal
-    for i in range(args.n_workers):
+    for _ in range(args.n_workers):
         queue.put(None)
     # wait for workers to finish
     for w in workers:
@@ -94,11 +133,22 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('data_path', help='Path to data directory. ')
     parser.add_argument('name')
+    # data args --> get_counts
     parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
     parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
-   # experiment control args
+    # split args --> main --> split_data
+    # let's define them in the experiments parameters for now and see if we need to change that
+    # parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
+    parser.add_argument('--restart', action='store_true', help="If passed, reload existing models. Will raise an error if models don't exist")
+    group = parser.add_argument_group('Split policy. If no argument or unseen-frac is passed, split is done randomly once and shared between models')
+    group = group.add_mutually_exclusive_group()
+    group.add_argument('--load-all-split-from', metavar='RUN', help='If passed, load all splits from given directory. Use to compare models on the same data.', default=None)
+    group.add_argument('--load-each-split', action='store_true', help='If passed, for each model, load split from its own directory. Use with premade splits.')
+    group.add_argument('--random-split', action='store_true', help='If passed, split data randomly separately for all models.')
+    group.add_argument('--unseen-frac', default=0.25, type=float, help='Fraction of unseen variants. Used only if no other split-policy option is passed.')
+    # experiment control args
     parser.add_argument('-n','--n-workers', help='Number of model to train in parallel',type=int, default=8)
     parser.add_argument('-N', '--n-models', help='Total number of models to train', default=1000, type=int)
     parser.add_argument('--i0', help='Index of first model to train (useful to continue previous experiments)', default=0, type=int)
@@ -106,17 +156,36 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
+    if not args.random_split and args.load_all_split_from is None and not args.load_each_split :
+        setattr(args, 'shared_random_split', True)
+    else:
+        setattr(args, 'shared_random_split', False)
+
     parent_model_dir = join('models', args.name)
     make_dir_if_needed(parent_model_dir)
     make_dir_if_needed(join('runs', args.name))
+    make_dir_if_needed(f'logs/{args.name}')
     device = 'cuda' if torch.cuda.is_available() else 'cpu' 
     print(f'Using {device}.')
     counts = get_counts(args)
 
+    if args.shared_random_split:
+        _index_dir = join('models',args.name,'split') 
+        split_policy = SplitPolicy.SHARED_RANDOM
+    elif args.load_all_split_from:
+        _index_dir = args.load_all_split_from
+        split_policy = SplitPolicy.LOAD_ALL
+    else:
+        _index_dir = ''
+        if args.load_each_split:
+            split_policy = SplitPolicy.LOAD_EACH
+        else:
+            split_policy = SplitPolicy.RANDOM
+
     main_ctx = Context(
         device, parent_model_dir, run_name=args.name,
         verbosity = 1,
-        index_dir = join(parent_model_dir, 'split'),
+        index_dir=_index_dir,
     )
     data = Data.from_df(counts, device=device)
     if args.shared_random_split:
