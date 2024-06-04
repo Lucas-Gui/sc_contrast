@@ -194,8 +194,8 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen[stop_score] > best_score:
             best_score = metrics_seen[stop_score]
-            torch.save(model, join(run_dir, 'best_model.pkl'))
-            with open(join(run_dir, 'best_score.json'), 'w') as file:
+            torch.save(model, join(ctx.run_dir, 'best_model.pkl'))
+            with open(join(ctx.run_dir, 'best_score.json'), 'w') as file:
                 json.dump({'i':i, f'{stop_score}_seen':best_score}, file, sort_keys=True, indent=2)
         if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step(metrics_seen[f'{ctx.k_nn}_nn_ref'])
@@ -203,7 +203,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             scheduler.step(i)
 
         if test_unseen is not None:
-            metrics_unseen = core_loop(test_unseen, model, loss_fn, optimizer=None, mode='test', unseen=True)
+            metrics_unseen = core_loop(test_unseen, model, loss_fn, ctx=ctx, optimizer=None, mode='test', unseen=True)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
         torch.save(model, ctx.model_file)
@@ -357,7 +357,7 @@ def main(args, data:Data, ctx:Context):
     else :
         raise ValueError('Please specify a valid scheduler')
     
-    writer = SummaryWriter(join('runs',args.dest_name,run_name))
+    writer = SummaryWriter(join('runs',args.dest_name,ctx.run_name))
 
     train_model(train, test_seen, test_unseen, model, run_meta,
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
@@ -368,7 +368,7 @@ def test(args): #TODO : Fix. in particular, make a fake data directory with all 
     print('---RUNNING TEST--- ')
     args.data_path = None
     args.restart = False
-    make_dir_if_needed(run_dir)
+    make_dir_if_needed(_run_dir)
     counts = pd.read_csv('/home/lguirardel/data/perturb_comp/data/KRAS_test.csv', index_col=0)
 
     main(args, counts, unseen_frac=0, ctx=Context())
@@ -455,8 +455,7 @@ def args_check(args, sources):
 if __name__ == '__main__':
     parser = make_parser()
     args = parser.parse_args()
-    run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
-    run_name = args.run_name if not args.run_test else 'TEST' 
+    _run_dir = join('models', args.dest_name, args.run_name) if not args.run_test else join('models', '_test')
     # run test
     if args.run_test:
         test(args)
@@ -469,8 +468,8 @@ if __name__ == '__main__':
     args_check(args, sources)
 
     # safety overwriting check
-    if os.path.exists(join(run_dir, 'config.ini')) and not args.restart and not args.overwrite:
-        check = input(f'{run_dir} already exists, are you sure you want to overwrite ? [Y/n] ')
+    if os.path.exists(join(_run_dir, 'config.ini')) and not args.restart and not args.overwrite:
+        check = input(f'{_run_dir} already exists, are you sure you want to overwrite ? [Y/n] ')
         if check.lower() in ['n','no']:
             print('Exiting.')
             sys.exit()
@@ -479,22 +478,22 @@ if __name__ == '__main__':
     if args.dest_name:
         make_dir_if_needed(join('models', args.dest_name))
         make_dir_if_needed(join('runs', args.dest_name))
-    make_dir_if_needed(run_dir)
+    make_dir_if_needed(_run_dir)
     # save args to file
-    parser.write_config_file(args, [join(run_dir, 'config.ini')], exit_after=False)
+    parser.write_config_file(args, [join(_run_dir, 'config.ini')], exit_after=False)
     # print(parser._source_to_settings)
     # load variants to include
 
     print()
-    device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
-    print(f'Using {device}.')
-    counts = get_counts(args)
+    _device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
+    print(f'Using {_device}.')
+    _counts = get_counts(args)
     ctx = Context(
-        device, run_dir, run_name, task=args.task, k_nn=args.knn, 
+        _device, _run_dir, args.run_name, task=args.task, k_nn=args.knn, 
         verbosity=args.verbose,
-        index_dir = join(run_dir, 'split'),
-        model_file = join(run_dir,'model.pkl'),
-        meta_file = join(run_dir, 'meta.json'),
+        index_dir = join(_run_dir, 'split'),
+        model_file = join(_run_dir,'model.pkl'),
+        meta_file = join(_run_dir, 'meta.json'),
     )
     data = Data.from_df(_counts, device=_device)
     main(args, data, ctx=ctx, )
