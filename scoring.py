@@ -61,13 +61,13 @@ def knn_ref_predict(model:Model, train:DataLoader, test:DataLoader, k, device='c
     emb_train = torch.concat(emb_train)
     emb_test = torch.concat(emb_test)
     y_train = torch.concat(y_train)
-    y_test = torch.concat(y_test)
+    y_test = torch.concat(y_test).cpu().numpy()
     if return_x:
         X_train = torch.concat(X_train)
         X_test = torch.concat(X_test)
     knn = KNeighborsClassifier(k)
-    knn.fit(emb_train, y_train)
-    y_pred = knn.predict(emb_test)
+    knn.fit(emb_train.cpu().numpy(), y_train.cpu().numpy())
+    y_pred = knn.predict(emb_test.cpu().numpy())
     return y_test, y_pred, (y_train, X_train, X_test, emb_train, emb_test)
 
 @torch.no_grad
