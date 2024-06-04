@@ -383,9 +383,9 @@ def make_parser():
     parser.add_argument('--verbose', default=2, help='Verbosity level. Set to 1 to silence tqdm output', type=int)
 
     parser.add_argument('--restart', action='store_true')
-    parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
+    parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given path. Use to compare models on the same data', default=None)
     parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
-    parser.add_argument('--unseen-fraction', default=0.25, type=float, help='Fraction of unseen variants')
+    parser.add_argument('--unseen-frac', default=0.25, type=float, help='Fraction of unseen variants')
     
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
@@ -402,6 +402,7 @@ def make_parser():
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
     parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
+    # parser.add_argument('--subsample-variants', metavar='p', type=float, help='Subsample p fraction of variants', default=None)
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If passed, do not rescale emebeddings to unit norm')
     # scheduler lr args

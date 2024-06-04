@@ -1,5 +1,6 @@
 '''Run models in parallel with shared data'''
 from argparse import ArgumentParser, Namespace
+from pprint import pprint
 import torch
 import torch.multiprocessing as mp # allow tensor sharing
 from torch import Tensor
@@ -11,7 +12,7 @@ from typing import *
 from configparser import ConfigParser
 
 from hyperparam import PARAM_LIST, CONST_PARAMS, sample
-from main import Context, make_data, main, get_counts, make_dir_if_needed
+from main import Context, main, get_counts, make_dir_if_needed, config_dict, make_parser, split_data
 from contrastive_data import Data
 
 ## CHANGE hyperparam.py TO CHANGE EXPERIMENT PARAMETERS
