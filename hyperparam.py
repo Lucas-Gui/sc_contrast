@@ -79,7 +79,7 @@ class ShapeSampler():
     def sample(self):
         n = rng.integers(self.n_neurons_min, self.n_neurons_max+1, endpoint=True, dtype=int)
         l = rng.integers(1, self.n_layer_max+1, dtype=int )
-        return ' '.join([str(n)] * l)
+        return [n]*l
 
 # PARAM_LIST = [
 #     NumParamSampler('lr', 1e-5, 1e-1, 'log'),
@@ -130,21 +130,20 @@ PARAM_LIST = [ # nabid embed dim experiment
     ConstParamSampler('weight-decay',0.08),
     ConstParamSampler('batch-size', 512),
     # NumParamSampler('positive-fraction',0.4,0.6, 'logodds', ),
-    ConstParamSampler('shape','320 320'),
+    ConstParamSampler('shape',[320,320]),
     NumParamSampler('embed-dim', min_val=2, max_val=20, type=int),
     ConstParamSampler('task','classifier'),
-    ConstParamSampler('n-epochs', 200),
     # FOR NABID DATA
-    ConstParamSampler('unseen-fraction', 0),
-    ConstParamSampler('data-subset', 'filtered'),
     # CatParamSampler('mil-mode',['mean', 'attention']),
     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 ]
 
-CONST_PARAMS = { #Parameters that are constant for all models
-    # 'no-norm-embeds':True, #uncomment to not normalize embeddings
-    'filter-variants':'filt_nabid', #uncomment to use only R175H vs WT (2 classes)
-
+CONST_PARAMS = { #Parameters that are constant for all models IN EXPERIMENT.PY
+    # override the default values
+    # arg names should use underscores, not dashes
+    # 'no_norm_embeds':True, #uncomment to not normalize embeddings
+    "n_epochs":200,
+    # "unseen_frac":0., # no unseen class #will be overriden in experiment.py
 }
 
 def sample(params, const_params = {}):
@@ -163,8 +162,11 @@ async def worker(name, worker_name, gen, path, load_split = True, overwrite = Fa
         # creating the command
     #python main.py ~/data/nabid_data/p53pilot/Data/RawData/filtered_feature_bc_matrix/wrangled/ test_nabid --dest-name nabid 
 
-        cmd =  (f'python main.py {path} {task_name} --dest-name {name} --verbose 1 ' 
-                +' '.join([f'--{arg} {param}' for arg, param in params.items() ]))
+        cmd =  f'python main.py {path} {task_name} --dest-name {name} --verbose 1 '
+        for arg, param in params.items():
+                if isinstance(param, list):
+                    param = ' '.join(map(str, param)) 
+                cmd = cmd +f'--{arg} {param} ' 
         if overwrite:
             cmd += ' --overwrite'
         if i > 0 and load_split:
