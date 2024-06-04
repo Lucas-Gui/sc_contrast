@@ -322,7 +322,7 @@ def make_loaders(*dfs:pd.DataFrame, batch_size=64, dataset_class = SiameseDatase
     '''
     dls = []
     for i, df in enumerate(dfs):
-        if len(df) == 0:
+        if df is None:
             dls.append(None)
             continue
         ds = dataset_class(df, p=pos_frac  if i ==0 else 0.5, **dataset_kwargs) # use half/half +/- pairs for eval (only for relevant dataloaders)
