@@ -16,16 +16,14 @@ class Data():
     x : Tensor
     y : Tensor
     cycle : Tensor
-    cell_ids : pd.DataFrame
     variants : pd.Series
 
-    def __init__(self, x,y,cycle, cats,cycle_cats, cell_ids,variants ) -> None:
+    def __init__(self, x,y,cycle, cats,cycle_cats, variants ) -> None:
         self.x =x
         self.y = y
         self.cycle = cycle
         self._cats = cats
         self.cycle_cats = cycle_cats
-        self.cell_ids = cell_ids
         self._variants = variants
     # safety against changing categories after y has been computed
     @property
@@ -66,10 +64,8 @@ class Data():
             dtype=torch.float32, device=device)
         y = None
         # for instance bag datasets # TODO : make sure this is not an issue, otherwise move in child class
-        # cell_ids : bc df indexes are cell barcodes
-        cell_ids = pd.DataFrame(np.arange(len(df)), index = df.index.copy(), columns=['ids'])  
         variants = df.variant.copy() # to be able to group by
-        data = cls(x,y,cycle, cats,cycle_cats, cell_ids, variants)
+        data = cls(x,y,cycle, cats,cycle_cats, variants)
         return data
     
     def subset(self, index, drop_cats = False) -> Self:
@@ -84,7 +80,6 @@ class Data():
             self.cycle[index],
             self.cats,
             self.cycle_cats,
-            self.cell_ids.loc[index],
             self.variants.loc[index]
         )
         if drop_cats:
@@ -115,7 +110,6 @@ class Data():
     #     self.x = self.x[filt]
     #     self.y = self.y[filt]
     #     self.cycle = self.cycle[filt]
-    #     self.cell_ids = self.cell_ids[filt]
 
 
 class _DfDataset(Dataset):
@@ -141,7 +135,7 @@ class InstanceBagDataset(IterableDataset, _DfDataset):
     def __init__(self, data:Data, bag_size=5, p=0.5, **kwargs) -> None:
         _DfDataset.__init__(self, data) #this is ugly design but I don't want to rely on Pytorch being cooperative
         # cell ids is a dataframe with the same index as variants, which is a Series
-        self.cell_ids = data.cell_ids 
+        self.cell_ids = pd.DataFrame(np.arange(len(data)), index = data.variants.index.copy(), columns=['ids']) # numerical index w.r.t. X
         self.variant = data.variants
         self.bag_size = bag_size
 
