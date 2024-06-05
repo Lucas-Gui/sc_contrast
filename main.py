@@ -196,7 +196,9 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             best_score = metrics_seen[stop_score]
             torch.save(model, join(ctx.run_dir, 'best_model.pkl'))
             with open(join(ctx.run_dir, 'best_score.json'), 'w') as file:
-                json.dump({'i':i, f'{stop_score}_seen':best_score}, file, sort_keys=True, indent=2)
+                json.dump(
+                    {'i':i, f'{stop_score}_seen':best_score, }, 
+                    file, sort_keys=True, indent=2)
         if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step(metrics_seen[f'{ctx.k_nn}_nn_ref'])
         elif isinstance(scheduler, optim.lr_scheduler.CosineAnnealingWarmRestarts):
@@ -339,6 +341,7 @@ def main(args, data:Data, ctx:Context):
         run_meta = {
             'i':0,
         }
+    run_meta['n_variants'] = data_containers[0].variants.nunique()
     train, test_seen, test_unseen = make_loaders(
         *data_containers, batch_size=args.batch_size, n_workers=args.n_workers, 
          dataset_class=config.dataset_class, dataset_kwargs={'bag_size':args.bag_size},
@@ -356,8 +359,8 @@ def main(args, data:Data, ctx:Context):
         )
     else :
         raise ValueError('Please specify a valid scheduler')
-    
-    writer = SummaryWriter(join('runs',args.dest_name,ctx.run_name))
+    # models/exp/run -> runs/exp/run
+    writer = SummaryWriter(join('runs',*(ctx.run_dir.split('/')[1:])))
 
     train_model(train, test_seen, test_unseen, model, run_meta,
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,

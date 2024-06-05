@@ -35,9 +35,10 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
     log = open(f'logs/{name}/{worker_id}.log', 'w')
     for args, data, ctx in iter(queue.get, None): # iterates until None is sent
         t = datetime.now()
-        print(f'Starting task {ctx.run_name} on worker {worker_id} at time {t.strftime("%d/%m %H:%M")}.',
+        print(f'Starting task {ctx.run_name} on worker {worker_id}\tat time {t.strftime("%d/%m %H:%M")}.',
             f'Logging to logs/{name}/{worker_id}.log')
         log.write(f'Task {ctx.run_name}\n')
+        log.write(t.strftime("%d/%m %H:%M")+'\n')
         log.write(str(args))
         with redirect_stderr(log), redirect_stdout(log):
             main(args, data, ctx,  )
@@ -63,16 +64,17 @@ def make_task(param_list, const_params, data, i:int, main_ctx:Context, split_pol
         case SplitPolicy.SHARED_RANDOM | SplitPolicy.LOAD_ALL:
             param_dict['load_split'] = main_ctx.index_dir
         case SplitPolicy.LOAD_EACH:
-            param_dict['load_split'] = f"{main_ctx.run_name}/{main_ctx.run_name}_{i}"
+            param_dict['load_split'] = f"models/{main_ctx.run_name}/{main_ctx.run_name}_{i}/split"
         case SplitPolicy.RANDOM:
             pass # already None
-    args = make_parser().parse_args(['N/A',  f"{main_ctx.run_name}_{i}"]) # default args
+    # default args + destination name for logging
+    args = make_parser().parse_args(['N/A',  f"{main_ctx.run_name}_{i}", "--dest-name", main_ctx.run_name]) 
     for key, value in param_dict.items(): # update args with hyperparameters
         setattr(args, key, value)
     with open(join(run_dir, 'config.ini'), 'w') as f:
         param_cfg = ConfigParser()
-        pprint(param_dict)
-        param_cfg.read_dict({'':(param_dict)})
+        # pprint(param_dict)
+        param_cfg.read_dict({'args':(param_dict)})
         param_cfg.write(f)
     ctx = Context(
         main_ctx.device, 
