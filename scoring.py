@@ -9,7 +9,6 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 
-
 def accuracy(e1: Tensor, e2: Tensor, y, margin):
     d = (e1 - e2).norm(p=2)
     return torch.logical_xor(y, d>margin).float().mean()
@@ -47,14 +46,15 @@ def knn_ref_predict(model:Model, train:DataLoader, test:DataLoader, k, device='c
     emb_train, y_train, X_train = [], [], []
     for x,y in train: # x,y are tuples of tensors of any size, we're taking the first one
         with torch.no_grad():
-            emb_train.append(model.embed(x[0].to(device)).cpu().squeeze())
+            emb_train.append(model.embed(x[0].to(device)).cpu())#.squeeze() # does it do anything ? if yes, add torch.at_least_2d for the rare case where the last batch has size 1
             y_train.append(y[0])
             if return_x:
                 X_train.append(x[0])
     emb_test, y_test, X_test = [], [], []
     for x,y in test:
+        # print(x[0].shape, y[0].shape, flush=True)
         with torch.no_grad():
-            emb_test.append(model.embed(x[0].to(device)).cpu().squeeze())
+            emb_test.append(model.embed(x[0].to(device)).cpu())#.squeeze() # see above
             y_test.append(y[0])
             if return_x:
                 X_test.append(x[0])
