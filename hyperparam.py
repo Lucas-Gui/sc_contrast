@@ -81,23 +81,9 @@ class ShapeSampler():
         l = rng.integers(1, self.n_layer_max+1, dtype=int )
         return [n]*l
 
-# PARAM_LIST = [
-#     NumParamSampler('lr', 1e-5, 1e-1, 'log'),
-#     CatParamSampler('scheduler', ['restarts','plateau']),
-#     NumParamSampler('patience',10,200, 'log', type=int),
-#     NumParamSampler('cosine-t',200, 600, 'lin', type=int),
-#     CatParamSampler('loss',[*main.loss_dict.keys()]),# will have to reset to standard if we are not choosing siamese
-#     NumParamSampler('margin',1e-3, 1-1e-3, 'logodds'),
-#     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-#     NumParamSampler('dropout', min_val=1e-1, max_val=0.5,mode='log'),
-#     NumParamSampler('weight-decay', min_val=1e-4, max_val=1,mode='log'),
-#     NumParamSampler('batch-size', min_val=16, max_val=1024, mode='pow2'),
-#     NumParamSampler('positive-fraction', 0.01, 0.99, 'logodds', ),
-#     ShapeSampler('shape',5, 20, 200),
-#     ConstParamSampler('embed-dim', 20),
-#     CatParamSampler('task',[*main.config_dict.keys()])
+PARAM_LIST = [
 
-# ]
+]
 
 # PARAM_LIST = [ # ,  siamese only
 #     NumParamSampler('lr', 1e-5, 1e-1, 'log'),
@@ -118,31 +104,49 @@ class ShapeSampler():
 #     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
 # ]
 
-PARAM_LIST = [ # nabid embed dim experiment
-    ConstParamSampler('lr',2e-3),
-    ConstParamSampler('scheduler', 'restarts'),
-    # NumParamSampler('patience',10,500, 'log', type=int),
-    ConstParamSampler('cosine-t',90),
-    ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
-    # NumParamSampler('margin',0.5, 4, 'log'),
-    # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-    ConstParamSampler('dropout',0.0375),
-    ConstParamSampler('weight-decay',0.08),
-    ConstParamSampler('batch-size', 512),
-    # NumParamSampler('positive-fraction',0.4,0.6, 'logodds', ),
-    ConstParamSampler('shape',[320,320]),
-    NumParamSampler('embed-dim', min_val=2, max_val=20, type=int),
-    ConstParamSampler('task','classifier'),
-    # FOR NABID DATA
-    # CatParamSampler('mil-mode',['mean', 'attention']),
-    # NumParamSampler('bag-size', 1, 100, 'log', type=int),
-]
+# PARAM_LIST = [ # nabid embed dim experiment
+#     ConstParamSampler('lr',2e-3),
+#     ConstParamSampler('scheduler', 'restarts'),
+#     # NumParamSampler('patience',10,500, 'log', type=int),
+#     ConstParamSampler('cosine-t',90),
+#     ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
+#     # NumParamSampler('margin',0.5, 4, 'log'),
+#     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
+#     ConstParamSampler('dropout',0.0375),
+#     ConstParamSampler('weight-decay',0.08),
+#     ConstParamSampler('batch-size', 512),
+#     # NumParamSampler('positive-fraction',0.4,0.6, 'logodds', ),
+#     ConstParamSampler('shape',[320,320]),
+#     NumParamSampler('embed-dim', min_val=2, max_val=20, type=int),
+#     ConstParamSampler('task','classifier'),
+#     # FOR NABID DATA
+#     # CatParamSampler('mil-mode',['mean', 'attention']),
+#     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
+# ]
 
+# CONST_PARAMS = { #Parameters that are constant for all models IN EXPERIMENT.PY
+#     # override the default values
+#     # arg names should use underscores, not dashes
+#     # 'no_norm_embeds':True, #uncomment to not normalize embeddings
+#     "n_epochs":200,
+#     # "unseen_frac":0., # no unseen class #will be overriden in experiment.py
+# }
+    ## FOR KRAS VARIANT NUMBER EXPERIMENT
 CONST_PARAMS = { #Parameters that are constant for all models IN EXPERIMENT.PY
     # override the default values
     # arg names should use underscores, not dashes
     # 'no_norm_embeds':True, #uncomment to not normalize embeddings
-    "n_epochs":200,
+    "n_epochs":600,
+    "embed_dim":20,
+    "task":"classifier",
+    "loss":"standard",
+    "scheduler":"restarts",
+    "cosine_t":300,
+    "lr":1e-4,
+    "shape":[512, 512, 512],
+    "dropout":0.15,
+    "batch_size":512,
+    "weight_decay":0.5,
     # "unseen_frac":0., # no unseen class #will be overriden in experiment.py
 }
 
@@ -150,10 +154,10 @@ def sample(params, const_params = {}):
     d = {}
     for p in params :
         d[p.name] = p.sample()
+    d.update(const_params) #TODO : add a check for duplicate keys
     # additional processing
     if d['task'] != 'siamese':
         d['loss'] = 'standard'
-    d.update(const_params)
     return d
 
 async def worker(name, worker_name, gen, path, load_split = True, overwrite = False):
