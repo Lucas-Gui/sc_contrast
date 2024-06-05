@@ -416,7 +416,7 @@ def make_parser():
     sched_args.add_argument('--patience',type=int,help='Patience for reduce lr on plateau', default=40)
     sched_args.add_argument('--cosine-t',type=int,help='Period for cosine annealing', default=100)
 
-    parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='siamese')
+    parser.add_argument('--task',choices=[*config_dict.keys()], help='Type of learning task to optimize', default='classifier')
     parser.add_argument('--knn', default=5, type=int, help='Number of neighbors for knn scoring')
     parser.add_argument('--bag-size', '--instance', default=0, type=int, help='Number of bag_sizes to use for Multiple Instance Learning. If 0, do not use MIL')
     parser.add_argument('--mil-mode', choices=['attention','mean'], default='attention', help='MIL aggregation mode')
