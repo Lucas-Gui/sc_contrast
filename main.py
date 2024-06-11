@@ -298,11 +298,17 @@ def split_data(data:Data, ctx:Context, restart, load_split_path=None, unseen_fra
         df.to_csv(join(ctx.index_dir,f'index_{i}.csv'))
     return containers
 
-def main(args, data:Data, ctx:Context):
+def main(args, data:Data|List[Data], ctx:Context):
+    '''
+    If data is a Data object, will split it according to args and ctx. This creates copies and should be avoided if possible when training multiple models.
+    '''
     print(f"{ctx.run_dir=}")
-    # split data
-    data_containers = split_data(
-        data, ctx, args.restart, args.load_split, args.unseen_frac)
+    # split data iff it is not already split
+    if isinstance(data, Data):
+        data_containers = split_data(
+            data, ctx, args.restart, args.load_split, args.unseen_frac)
+    else:
+        data_containers = data
     for data in data_containers:
         if data is not None:
             data.compute_y() # freeze y once variants are set

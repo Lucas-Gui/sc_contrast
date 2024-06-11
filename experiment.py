@@ -28,14 +28,14 @@ class SplitPolicy(Enum):
 ## CHANGE hyperparam.py TO CHANGE EXPERIMENT PARAMETERS
 
 ## MULTIPROCESSING CODE
-Task = Tuple[Namespace, Data, Context,]
+Task = Tuple[Namespace, Data|List[Data], Context,]
 
 def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
     '''worker function that runs a model and sends back the results'''
     log = open(f'logs/{name}/{worker_id}.log', 'w')
     for args, data, ctx in iter(queue.get, None): # iterates until None is sent
         t = datetime.now()
-        print(f'Starting task {ctx.run_name} on worker {worker_id}\tat time {t.strftime("%d/%m %H:%M")}.',
+        print(f'Starting task {ctx.run_name} on worker {worker_id}\t(pid {getpid()}) at {t.strftime("%d/%m %H:%M")}.',
             f'Logging to logs/{name}/{worker_id}.log')
         log.write(f'Task {ctx.run_name}\n')
         log.write(t.strftime("%d/%m %H:%M")+'\n')
@@ -54,7 +54,7 @@ def make_task(param_list, const_params, data, i:int, main_ctx:Context, split_pol
     Create the necessary directory and files.
     Handles the splitting policy by modifying the load_split argument.
     '''
-    print(f"{split_policy=}")
+    # print(f"{split_policy=}")
     run_dir = join(main_ctx.run_dir, f"{main_ctx.run_name}_{i}")
     # creating model dire and saving config
     make_dir_if_needed(run_dir)
@@ -190,6 +190,11 @@ if __name__ == '__main__':
         index_dir=_index_dir,
     )
     data = Data.from_df(counts, device=device)
-    if args.shared_random_split:
-        split_data(data, main_ctx, restart=False, load_split_path=None, unseen_frac=args.unseen_frac)
+    # split data if using a shared split
+    if split_policy == SplitPolicy.SHARED_RANDOM:
+        data = split_data(data, main_ctx, restart=False, load_split_path=None, unseen_frac=args.unseen_frac)
+    elif split_policy == SplitPolicy.LOAD_ALL:
+        data = split_data(data, main_ctx, restart=False, load_split_path=args.load_all_split_from,)
+    else :
+        print('Using separated data splits. Watch out for memory usage.')
     main_f(args, data, main_ctx, split_policy=split_policy)
