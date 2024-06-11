@@ -256,6 +256,10 @@ class Model(Module):
         return x
     
     def forward(self, *x : List[Tensor]) -> Tuple[Tuple[Tensor, ...], Tensor]:
+        '''
+        Inputs : list of n tensors
+        Outputs : tuple of n tensors for the loss, and the embedding of the first tensor
+        '''
         raise NotImplementedError
     
 class Siamese(Model):
@@ -277,9 +281,9 @@ class Siamese(Model):
 class ContrastiveModel(Model):
     '''
     A contrastive learning model with an optional projection on top of the embeddings
-    Takes a single tensor for losses such as batch contrastive loss
+    Takes any number of tensors as input
     Input shapes :
-        (x,) : (B,d) 
+        *x : (B,d) 
     '''
     def __init__(self, network:InnerNetwork, projection_shape = [], **kwargs) -> None:
         super().__init__(network, **kwargs)
@@ -294,11 +298,11 @@ class ContrastiveModel(Model):
         else:
             self.projection = nn.Identity()
 
-    def forward(self, x:Tensor) :
-        '''takes a single tensor x'''
-        e = self.embed(x)
-        e = self.projection(e)
-        return e
+    def forward(self, *x:Tensor) :
+        '''takes tensors x'''
+        e = [self.embed(t) for t in x ]
+        p = [self.projection(t) for t in e]
+        return p, e[0]
         
 
 class Classifier(Model):
