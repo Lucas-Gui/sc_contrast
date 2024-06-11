@@ -93,7 +93,7 @@ class ChoiceSampler():
         return rng.choice(self.samplers, p=self.probs).sample()
 
 PARAM_LIST = [
-    ChoiceSampler('projection-shape', [ShapeSampler('', 2, 20, 20), ConstParamSampler('', None)], [2/3, 1/3]),
+    ChoiceSampler('projection-shape', [ShapeSampler('', 2, 20, 20), ConstParamSampler('', '')], [2/3, 1/3]),
 ]
 
 # PARAM_LIST = [ # ,  siamese only
