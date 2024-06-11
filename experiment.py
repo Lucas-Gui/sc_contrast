@@ -3,10 +3,12 @@ from argparse import ArgumentParser, Namespace
 from pprint import pprint
 import torch
 import torch.multiprocessing as mp # allow tensor sharing
+from torch.cuda import OutOfMemoryError
 from torch import Tensor
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from os.path import join
+from os import getpid
 from time import sleep
 from typing import *
 from configparser import ConfigParser
@@ -40,12 +42,18 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
         log.write(f'Task {ctx.run_name}\n')
         log.write(t.strftime("%d/%m %H:%M")+'\n')
         log.write(str(args))
-        with redirect_stderr(log), redirect_stdout(log):
-            main(args, data, ctx,  )
+        try :
+            with redirect_stderr(log), redirect_stdout(log):
+                main(args, data, ctx,  )
+        except OutOfMemoryError as e:
+            log.write(f"Out of memory error in task {ctx.run_name}.")
+            print(f"Out of memory error in task {ctx.run_name} : terminating worker {worker_id}.")
+            break
         # except Exception as e:
         #     print(e)
         #     raise RuntimeError(f"""Error in task {ctx.run_name} on worker {worker_id}. 
         #             See logs/{name}/{worker_id}.log for details.""")
+        log.write("\n")
     log.close()
 
 def make_task(param_list, const_params, data, i:int, main_ctx:Context, split_policy)->Task:
@@ -119,8 +127,11 @@ def main_f(args, data, main_ctx:Context, split_policy:SplitPolicy):
         if not queue.empty():
             task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx, split_policy=split_policy)
             queue.put(task) # copies everything except tensors, hopefully
-        # check if any process have raised exceptions
-
+        # check if processes are alive
+        for w in workers:
+            if not w.is_alive():
+                print(f"Worker {w.name} is dead. Joining.")
+                w.join()
     # send stop signal
     for _ in range(args.n_workers):
         queue.put(None)
