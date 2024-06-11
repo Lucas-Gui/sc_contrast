@@ -42,10 +42,10 @@ class _Config():
 config_dict:Dict[str, _Config] = { # task -> config mapping
     'siamese':_Config(loss_dict, Siamese, SiameseDataset),
     'classifier':_Config({'standard': ClassifierLoss}, Classifier, ClassifierDataset),
-    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, Siamese, BatchDataset),
+    'batch-supervised': _Config({'standard':BatchContrastiveLoss}, ContrastiveModel, BatchDataset),
     'cycle-classifier': _Config(
         {'standard':DoubleClassifierLoss}, CycleClassifier, CycleClassifierDataset
-        )
+        ),
 
 }
 
@@ -336,7 +336,8 @@ def main(args, data:Data, ctx:Context):
         model = config.model_class(
                inner_network, 
             #task-specific kwargs
-            n_class = n_class # should be equal to nb of codes 
+            n_class = n_class, # should be equal to nb of codes 
+            projection_shape=args.projection_shape, # shape of projection network for contrastive models. None for no projection
                             ).to(ctx.device)
         run_meta = {
             'i':0,
@@ -396,6 +397,7 @@ def make_parser():
     parser.add_argument('-a','--alpha',default =0, type=float, help='L2 embedding regularization')
     parser.add_argument('-d','--dropout',default=0.2, type=float, help='Dropout frequency')
     parser.add_argument('-w','--weight-decay',default=1e-2, type=float, help='Weight decay parameter')
+    parser.add_argument('--projection-shape', type=int, nargs='+', help='Projection MLP shape', default=None)
     parser.add_argument('--batch-size',default=128, help='Batch size', type=int)
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
@@ -444,7 +446,7 @@ def file_config_ignore(args, sources):
                     args.__dict__[arg] = value
 
 def args_check(args, sources):
-    '''argument compatibility check'''
+    '''argument compatibility check. Raise errors or print warnings if some arguments are incompatible.'''
     if args.restart:
         for arg in ['shape','embed_dim']:
             if sources['command_line'].get(arg) is not None:
@@ -453,8 +455,11 @@ def args_check(args, sources):
             warn('Argument load_split will be ignored in favor of split saved for this model previous instance')
     if (not args.no_norm_embeds and args.alpha ) and not args.task == 'cycle-classifier': # for cycle classifier, alpha is the cycle/variant weight
         warn('Embedding norm penalty parameter alpha is nonzero while embeddings are normalized.')
-    if args.task in ['classifier'] and args.alpha : 
-        raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
+    if args.task in ['classifier'] :
+        if args.projection_shape is not None:
+            print('Warning : projection shape is ignored for classifier task')
+        if args.alpha : 
+            raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
       
 if __name__ == '__main__':
     parser = make_parser()

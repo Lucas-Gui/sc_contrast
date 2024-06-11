@@ -72,17 +72,28 @@ class ConstParamSampler():
     
 class ShapeSampler():
     def __init__(self, name, n_layer_max, n_neurons_min, n_neurons_max, ) -> None:
+        '''Sample a shape with 1 to n_layer_max layers and n_neurons_min to n_neurons_max neurons per layer (inclusive).'''
         self.name = name
         self.n_layer_max = n_layer_max
         self.n_neurons_min = n_neurons_min
         self.n_neurons_max = n_neurons_max
     def sample(self):
-        n = rng.integers(self.n_neurons_min, self.n_neurons_max+1, endpoint=True, dtype=int)
+        n = rng.integers(self.n_neurons_min, self.n_neurons_max+1, dtype=int)
         l = rng.integers(1, self.n_layer_max+1, dtype=int )
         return [n]*l
+    
+# choose one sampler or another with different probabilities
+class ChoiceSampler():
+    def __init__(self, name, samplers, probs) -> None:
+        self.samplers = samplers
+        self.probs = probs
+        self.name = name
+
+    def sample(self):
+        return rng.choice(self.samplers, p=self.probs).sample()
 
 PARAM_LIST = [
-
+    ChoiceSampler('projection-shape', [ShapeSampler('', 2, 20, 20), ConstParamSampler('', None)], [2/3, 1/3]),
 ]
 
 # PARAM_LIST = [ # ,  siamese only
@@ -138,7 +149,7 @@ CONST_PARAMS = { #Parameters that are constant for all models IN EXPERIMENT.PY
     # 'no_norm_embeds':True, #uncomment to not normalize embeddings
     "n_epochs":600,
     "embed_dim":20,
-    "task":"classifier",
+    "task":"batch-supervised",
     "loss":"standard",
     "scheduler":"restarts",
     "cosine_t":300,

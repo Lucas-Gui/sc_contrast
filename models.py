@@ -274,6 +274,32 @@ class Siamese(Model):
         e2 = self.embed(x2)
         return (e1, e2), e1
 
+class ContrastiveModel(Model):
+    '''
+    A contrastive learning model with an optional projection on top of the embeddings
+    Takes a single tensor for losses such as batch contrastive loss
+    Input shapes :
+        (x,) : (B,d) 
+    '''
+    def __init__(self, network:InnerNetwork, projection_shape = [], **kwargs) -> None:
+        super().__init__(network, **kwargs)
+        if projection_shape: # check that projection is neither None nor []
+            i = projection_shape[0]
+            layers = [nn.Linear(network.output_shape, i)]
+            for j in projection_shape[1:]:
+                layers.append(nn.ReLU())
+                layers.append(nn.Linear(i, j))
+                i = j
+            self.projection = nn.Sequential(*layers)
+        else:
+            self.projection = nn.Identity()
+
+    def forward(self, x:Tensor) :
+        '''takes a single tensor x'''
+        e = self.embed(x)
+        e = self.projection(e)
+        return e
+        
 
 class Classifier(Model):
     '''
