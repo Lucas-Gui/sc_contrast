@@ -151,6 +151,7 @@ if __name__ == '__main__':
     parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
+    parser.add_argument('--filter-cells', action='store_true', help='If passed, filter cells based on counts, number of expressed genes, and mitochondrial counts.')
     # split args --> main --> split_data
     # let's define them in the experiments parameters for now and see if we need to change that
     # parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')

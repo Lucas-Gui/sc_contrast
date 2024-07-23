@@ -4,36 +4,65 @@ import numpy as np
 from contrastive_data import Data
 from os.path import join
 import os
+from enum import Enum
+from typing import *
+
+from psutil import Process
 
 EPS_STD = 1e-3
 
-def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
-              cell_meta_path, group_wt_like=False, filt_variants = None,
-              standardize=False)-> pd.DataFrame:
+def filter_nabid_data(counts:pd.DataFrame, gene_thr = 200, mito_freq_thr = 0.075, reads_thr = 180,
+                      log_mito_counts: float|None = 2.53): 
+    '''
+    gene_thr : minimum number of genes expressed in a cell
+    mito_freq_thr : maximum fraction of mitochondrial reads
+    reads_thr : minimum number of reads
+    log_mito_counts : optional. Minimum log10 of the number of mitochondrial reads
+    '''
+    n0 = len(counts)
+    counts = counts[(counts>0).sum(axis=1) > gene_thr] 
+    mt = counts.columns.str.startswith('MT-')
+    counts = counts[counts.loc[:,mt].sum(axis=1) < mito_freq_thr*counts.sum(axis=1)]
+    counts = counts[counts.sum(axis=1) > reads_thr]
+    if log_mito_counts is not None:
+        counts = counts[counts.loc[:,mt].sum(axis=1) > 10**log_mito_counts]
+    # remove all-0 genes
+    counts = counts.loc[:,counts.sum(axis=0) > 0]
+    print(f"\t\t{n0-len(counts)}/{n0} cells removed.", flush=True)
+    return counts.copy()
+
+def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path=None,
+              cell_meta_path=None, group_wt_like=False, filt_variants = None,
+              standardize=False, filt_cells=False, filter_kwargs={}
+              )-> pd.DataFrame:
     '''
     *_path : paths to gzipped mtx or csv files
     except variant_path, which refers to an unzipped csv file
+    filter_kwargs : arguments to pass to filter_nabid_data
     '''
     print('\tReading files...', flush=True)
     print('\t\tReading matrix', flush=True)
+    genes = pd.read_csv(gene_path, header=None, sep=' ', compression='gzip').squeeze()
+    cells = pd.read_csv(cell_path, header=None, sep=' ', compression='gzip').squeeze()
+    print('\t\tReading genes and cells', flush=True)
     with gzip.open(mtx_path) as file: #read counts
         counts = pd.read_csv(file, skiprows=3,header=None, sep=' ')
-    counts.columns = ['cell','gene','reads']
+    counts.columns = ['cell','gene','reads'] 
     counts[['cell','gene']] -= 1 #file is imported from 1-indexed array format
-    print('\t\tReading genes and cells', flush=True)
-    with gzip.open(gene_path) as file: # read gene names
-        genes = pd.read_csv(file, header=None, sep=' ', ).squeeze()
-    with gzip.open(cell_path) as file:
-        cells = pd.read_csv(file,header=None, sep=' ', ).squeeze()
-    check_mtx_columns(counts, genes, cells)
+    check_mtx_columns(counts, genes, cells) # P-Seq is CELL x GENE, GFP is GENE x CELL
     print('\t\tReading variant data', flush=True)
-    with gzip.open(v2c_path) as file: # read cell tags
-        v2c = pd.read_csv(file, sep='\t', usecols=['cell','variant'])
-    variant_data = pd.read_csv(variant_path, index_col=0)
-    # read cell metadata (for cell cycle)
-    with gzip.open(cell_meta_path) as file: # read gene names
-        cell_meta = pd.read_csv(file, index_col=-1  )
-    cycle = cell_meta['phase.multi'].replace('G0', 'Uncycling')
+    v2c = pd.read_csv(v2c_path, sep='\t', usecols=['cell','variant'], compression='gzip')
+
+    if variant_path is not None:
+        variant_data = pd.read_csv(variant_path, index_col=0)
+        variant_data = variant_data['Variant functional class']
+        # read variant impact class
+        variant_data = variant_data.replace({'Impactful IV (gain-of-function)':'Impactful IV'})
+        variant_data = variant_data[variant_data!='unavailable']
+        v2c = v2c.merge(variant_data, how='left', left_on='variant', right_index=True ).dropna(axis=0)
+    else:
+        v2c['Variant functional class'] = 'Unassigned'
+
     print('\tMerging and processing...' ,flush=True)
 
     #pivot 
@@ -42,17 +71,24 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path,
     # counts = counts.drop(columns=['cell','gene']) #unnecessary : included in pivot
     counts = counts.pivot(index='cell_name',columns='gene_name',values='reads')
     counts = counts.fillna(0) # pivot will create NA where the .mtx file was sparse
-    counts['cycle'] = cycle.astype('category')
-    # read variant impact class
-    variant_data = variant_data['Variant functional class']
-    variant_data = variant_data.replace({'Impactful IV (gain-of-function)':'Impactful IV'})
-    variant_data = variant_data[variant_data!='unavailable']
-    # v2c = v2c[v2c['variant'].isin(variant_class.index)]
-    v2c = v2c.merge(variant_data, how='left', left_on='variant', right_index=True ).dropna(axis=0)
+    if filt_cells:
+        print('\t\tFiltering cells and removing variants subsequently absent.')
+        print(f'\t\t{Process().memory_info().rss/1024**3:.2f} GB used')
+        counts = filter_nabid_data(counts, **filter_kwargs)
+    if cell_meta_path is not None:
+    # read cell metadata (for cell cycle)
+        cell_meta = pd.read_csv(file, index_col=-1, compression='gzip')
+        counts['cycle'] = cell_meta['phase.multi'].replace('G0', 'Uncycling')
+    else:
+        counts['cycle'] = 'Unassigned'
+    counts['cycle'] = counts['cycle'].astype('category')
 
+    # v2c = v2c[v2c['variant'].isin(variant_class.index)]
+    print('\t\tMerging counts')
     #impute variant/impact class to cell and drop cells with missing values
     counts = counts.merge(v2c, how='left', left_index=True, right_on='cell').dropna(axis=0).set_index('cell')
     counts = counts[counts.variant != 'unassigned']
+    print(f'\t\t{Process().memory_info().rss/1024**3:.2f} GB used', flush=True)
     if filt_variants is not None:
         counts = counts[counts.variant.isin(filt_variants)]
     if group_wt_like:

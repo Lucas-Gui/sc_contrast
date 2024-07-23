@@ -92,11 +92,16 @@ def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'p
     else:
         raise ValueError('subset should be "processed", "raw" or "filtered"')
     paths = []
-    for p in [_r+'.matrix.mtx.gz',_r+'.genes.csv.gz',_r+'.cells.csv.gz', '.variants2cell.csv.gz', 
+    for p in [_r+'.matrix.mtx.gz',_r+'.genes.[ct]sv.gz',_r+'.cells.[ct]sv.gz', '.variants2cell.tsv.gz', 
               '.variants.csv', '.cells.metadata.csv.gz']:
+        #cells and genes have only one column, so tsv or csv is equivalent
         l = glob(join(data_dir, '*'+p)) #note : this means that variants2cell, variants and cells.metadata can all have any prefix
-        assert len(l)==1, f"There should be exaclty one match for {join(data_dir, '*'+p)}, {len(l)} found."
-        paths.extend(l)
+        assert len(l)<=1, f"There should be no more than one match for {join(data_dir, '*'+p)}, {len(l)} found."
+        if len(l) == 1:
+            paths.extend(l)
+        else:
+            print(f'{join(data_dir, "*"+p)} not found, skipping...')
+            paths.append(None)
     return paths
 
 def get_counts(args):
@@ -109,7 +114,7 @@ def get_counts(args):
         filt = filt.str.upper()
         print(f'Filtering for {filt.values}')
     counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
-                       standardize=args.data_subset != 'processed')
+                       standardize=args.data_subset != 'processed', filt_cells=args.filter_cells)
     return counts
 
 def load_split_df(index_dir, counts:pd.DataFrame, reorder_categories = True,
@@ -412,6 +417,7 @@ def make_parser():
     parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
+    parser.add_argument('--filter-cells', action='store_true', help='If passed, filter cells based on counts, number of expressed genes, and mitochondrial counts.')
     parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
     # parser.add_argument('--subsample-variants', metavar='p', type=float, help='Subsample p fraction of variants', default=None)
     parser.add_argument('--no-norm-embeds',action='store_true',
