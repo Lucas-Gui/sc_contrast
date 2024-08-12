@@ -1,5 +1,5 @@
 import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning) #silence pandas warning about is_sparse
+# warnings.simplefilter(action='ignore', category=FutureWarning) #silence pandas warning about is_sparse
 
 from data_utils import *
 from models import *
@@ -23,9 +23,12 @@ import sys
 from warnings import warn
 from dataclasses import dataclass
 from contextlib import nullcontext
+from copy import deepcopy
 
 import pprint
 # config : task -> loss, model, dataset
+
+SAVE_FREQUENCY = 100
 
 loss_dict : Dict[str, Type[ContrastiveLoss]] = {
     'standard':SiameseLoss,
@@ -185,8 +188,9 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
     stop_score = f'{ctx.k_nn}_nn_ref' # TODO : CHANGE TO SELF OR SET IN ARGS/CONTEXT
     print(optimizer)
     print('Early stopping metric : ', stop_score)
-    bar = tqdm(range(i_0, i_0+n_epoch), position=0, disable= ctx.verbosity <=1)
+    bar = tqdm(range(i_0, i_0+n_epoch), position=0, disable= ctx.verbosity <=2)
     best_score = - np.inf
+    best_i = last_save_model = i_0
     for i in bar:
         bar.set_postfix({'i':i})
         metrics_train = core_loop(train, model, loss_fn, ctx, optimizer, mode='train')
@@ -198,11 +202,15 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             test_seen, k=ctx.k_nn, device=ctx.device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
         if metrics_seen[stop_score] > best_score:
+            best_model = deepcopy(model)
             best_score = metrics_seen[stop_score]
-            torch.save(model, join(ctx.run_dir, 'best_model.pkl'))
+            best_i = i
+        if i % SAVE_FREQUENCY == 0 and best_i > last_save_model: # save model every N epochs, IF it has improved
+            last_save_model = i
+            torch.save(best_model, join(ctx.run_dir, 'best_model.pkl'))
             with open(join(ctx.run_dir, 'best_score.json'), 'w') as file:
                 json.dump(
-                    {'i':i, f'{stop_score}_seen':best_score, }, 
+                    {'i':best_i, f'{stop_score}_seen':best_score, }, 
                     file, sort_keys=True, indent=2)
         if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step(metrics_seen[f'{ctx.k_nn}_nn_ref'])
@@ -213,10 +221,11 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             metrics_unseen = core_loop(test_unseen, model, loss_fn, ctx=ctx, optimizer=None, mode='test', unseen=True)
             write_metrics(metrics_unseen, writer, 'test_unseen',i)
         #saving and writing
-        torch.save(model, ctx.model_file)
-        run_meta['i'] = i
-        with open(ctx.meta_file, 'w') as file:
-            json.dump(run_meta, file, sort_keys=True, indent=2)
+        if i % SAVE_FREQUENCY == 0:
+            torch.save(model, ctx.model_file)
+            run_meta['i'] = i
+            with open(ctx.meta_file, 'w') as file:
+                json.dump(run_meta, file, sort_keys=True, indent=2)
     writer.flush()
 
 
@@ -236,7 +245,7 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
     embeds = [] # store embeds for scoring
     labels = [] # store labels for scoring
     with torch.no_grad() if mode=='test' else nullcontext(): # disable grad only in test mode
-        for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, disable= ctx.verbosity <=1):
+        for x,y, in tqdm(data, position=1, desc=f'{mode}ing loop', leave=False, disable= ctx.verbosity <=2):
             x = [x_i.to(ctx.device) for x_i in x]
             y = [y_i.to(ctx.device) for y_i in y]
             outputs, emb = model.forward(*x)
@@ -276,22 +285,26 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
         })
     return metrics
 
-def split_data(data:Data, ctx:Context, restart, load_split_path=None, unseen_frac=0.25, cell_frac=0.25 ):
+def split_data(data:Data, ctx:Context, restart, load_split_path=None, unseen_frac=0.25, cell_frac=0.25, verbosity=3 ):
     '''
     Split the data into train, test_seen and test_unseen.
-    If restart, load split from index dir
+    If restart, load split from index dir.
     If load_split_path is not None, load split from that directory
-    Otherwise, create a new split.
+    Otherwise, create a new split (or raise an exception if that split exists). 
     In all cases, save the indices to ctx.index_dir
     '''
     if restart : #load model and split
         containers = load_split(ctx.index_dir, data)     
     else:
         if load_split_path is not None:
-            print(f'Copying split from {load_split_path}')
+            if verbosity > 1:
+                print(f'Copying split from {load_split_path}')
             containers = load_split(load_split_path, data)
         else:
-            print('Creating new data split')
+            if os.path.exists(ctx.index_dir):
+                raise FileExistsError(f'Index directory {ctx.index_dir} already exists.')
+            if verbosity > 1:
+                print('Creating new data split')
             containers = split(data, x_var=unseen_frac, x_cell=cell_frac) #random split
         make_dir_if_needed(ctx.index_dir)
         pd.DataFrame(containers[0].variants.cat.categories).to_csv(join(ctx.index_dir, 'categories.csv')) #save category order
@@ -313,6 +326,8 @@ def main(args, data:Data|List[Data], ctx:Context):
         data_containers = split_data(
             data, ctx, args.restart, args.load_split, args.unseen_frac)
     else:
+        if ctx.verbosity > 1:
+            print('Data is already split')
         data_containers = data
     for data in data_containers:
         if data is not None:
@@ -372,7 +387,7 @@ def main(args, data:Data|List[Data], ctx:Context):
     else :
         raise ValueError('Please specify a valid scheduler')
     # models/exp/run -> runs/exp/run
-    writer = SummaryWriter(join('runs',*(ctx.run_dir.split('/')[1:])))
+    writer = SummaryWriter(join('runs',*(ctx.run_dir.split('/')[1:])), max_queue=10)
 
     train_model(train, test_seen, test_unseen, model, run_meta,
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
