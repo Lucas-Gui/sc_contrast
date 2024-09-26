@@ -14,14 +14,14 @@ def logodds(x):
 
  ## Version 1 : implement myself
 class _NumParam():
-    def __init__(self, name, min_val, max_val, mode : Literal['lin','log', 'logodds', 'pow2'] = 'lin', 
-                 type:Type=None ) -> None:
+    def __init__(self, name, min_val, max_val, mode : Literal['lin','log', 'logodds', 'pow2', 'pow2_u'] = 'lin', 
+                 type:Type=None ) -> None: #todo : abstract class is not necessary anymore
         self.name = name
         self.min = min_val
         self.max = max_val
         self.mode = mode
         self.type = type
-        if mode == 'pow2':
+        if mode.startswith('pow2'):
             self.type=int
 
 # class NumParamRange(_NumParam):
@@ -36,6 +36,16 @@ class _NumParam():
 #             raise ValueError(f'mode needs to be lin or log, got "{self.mode}"')
         
 class NumParamSampler(_NumParam):
+    '''
+    Sample a number in the range [min, max] according to the mode. Parameters are sampled uniformly, then transformed according to the mode.
+    Output variable is always in the (min, max) range.
+    mode transforms: 
+    - 'lin' : linear sampling (no transform)
+    - 'log' : log 
+    - 'logodds' : logit transform (for variables that are ratios)
+    - 'pow2' : powers of 2
+    - 'pow2_u' : uniform in log_2 space, rounded to nearest integer
+    '''
     def sample(self):
         if self.mode == 'lin':
             x= rng.uniform(self.min, self.max)
@@ -48,7 +58,9 @@ class NumParamSampler(_NumParam):
         elif self.mode == 'pow2':
             x = rng.uniform(np.log2(self.min), np.log2(self.max))
             x = 2**int(x)
-
+        elif self.mode == 'pow2_u':
+            x = rng.uniform(np.log2(self.min), np.log2(self.max))
+            x = int(2**x)
         else :
             raise ValueError(f'mode needs to be lin, log, or symlog got "{self.mode}"')
         return self.type(x) if self.type is not None else x
@@ -71,15 +83,16 @@ class ConstParamSampler():
         return self.value
     
 class ShapeSampler():
-    def __init__(self, name, n_layer_max, n_neurons_min, n_neurons_max, ) -> None:
-        '''Sample a shape with 1 to n_layer_max layers and n_neurons_min to n_neurons_max neurons per layer (inclusive).'''
+    def __init__(self, name, n_layer_min, n_layer_max, n_neurons_min, n_neurons_max, ) -> None:
+        '''Sample a shape with n_layer_min to n_layer_max layers and n_neurons_min to n_neurons_max neurons per layer (inclusive).'''
         self.name = name
+        self.n_layer_min = n_layer_min
         self.n_layer_max = n_layer_max
         self.n_neurons_min = n_neurons_min
         self.n_neurons_max = n_neurons_max
     def sample(self):
         n = rng.integers(self.n_neurons_min, self.n_neurons_max+1, dtype=int)
-        l = rng.integers(1, self.n_layer_max+1, dtype=int )
+        l = rng.integers(self.n_layer_min, self.n_layer_max+1, dtype=int )
         return [n]*l
     
 # choose one sampler or another with different probabilities
@@ -92,72 +105,36 @@ class ChoiceSampler():
     def sample(self):
         return rng.choice(self.samplers, p=self.probs).sample()
 
-PARAM_LIST = [
-    ChoiceSampler('projection-shape', [ShapeSampler('', 2, 20, 20), ConstParamSampler('', '')], [2/3, 1/3]),
+
+# _ for experiment.py, - for hyperparam.py
+# PARAM_LIST = [
+#     ChoiceSampler('projection-shape', [ShapeSampler('', 2, 20, 20), ConstParamSampler('', '')], [2/3, 1/3]),
+# ]
+
+PARAM_LIST = [ 
+    NumParamSampler('embed_dim', 129, 1024, type=int, mode='pow2_u'),
+    CatParamSampler('task', ['classifier', 'batch-supervised']),
+    # CatParamSampler('no_norm_embeds', [True, False]), # need to debug why it gives nans
+    NumParamSampler('weight_decay', 1e-5, 1e-1, 'log'),
+    # CatParamSampler('log1p', [True, False]),
+    # ShapeSampler('shape', 1, 10, 512, 512),
 ]
-
-# PARAM_LIST = [ # ,  siamese only
-#     NumParamSampler('lr', 1e-5, 1e-1, 'log'),
-#     CatParamSampler('scheduler', ['restarts','plateau']),
-#     NumParamSampler('patience',10,500, 'log', type=int),
-#     NumParamSampler('cosine-t',50, 600, 'lin', type=int),
-#     ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
-#     # NumParamSampler('margin',0.5, 4, 'log'),
-#     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-#     NumParamSampler('dropout', min_val=1e-3, max_val=0.5,mode='log'),
-#     NumParamSampler('weight-decay', min_val=1e-5, max_val=10,mode='log'),
-#     NumParamSampler('batch-size', min_val=128, max_val=2048, mode='pow2'),
-#     NumParamSampler('positive-fraction', 0.4, 0.6, 'logodds', ),
-#     ShapeSampler('shape',4, 20, 1_000),
-#     ConstParamSampler('embed-dim', 20),
-#     ConstParamSampler('task', 'siamese'),
-#     # CatParamSampler('mil-mode',['mean', 'attention']),
-#     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
-# ]
-
-# PARAM_LIST = [ # nabid embed dim experiment
-#     ConstParamSampler('lr',2e-3),
-#     ConstParamSampler('scheduler', 'restarts'),
-#     # NumParamSampler('patience',10,500, 'log', type=int),
-#     ConstParamSampler('cosine-t',90),
-#     ConstParamSampler('loss','standard'),# will have to reset to standard if we are not choosing siamese
-#     # NumParamSampler('margin',0.5, 4, 'log'),
-#     # NumParamSampler('alpha', min_val=) # alpha = 0 since we normalize
-#     ConstParamSampler('dropout',0.0375),
-#     ConstParamSampler('weight-decay',0.08),
-#     ConstParamSampler('batch-size', 512),
-#     # NumParamSampler('positive-fraction',0.4,0.6, 'logodds', ),
-#     ConstParamSampler('shape',[320,320]),
-#     NumParamSampler('embed-dim', min_val=2, max_val=20, type=int),
-#     ConstParamSampler('task','classifier'),
-#     # FOR NABID DATA
-#     # CatParamSampler('mil-mode',['mean', 'attention']),
-#     # NumParamSampler('bag-size', 1, 100, 'log', type=int),
-# ]
-
-# CONST_PARAMS = { #Parameters that are constant for all models IN EXPERIMENT.PY
-#     # override the default values
-#     # arg names should use underscores, not dashes
-#     # 'no_norm_embeds':True, #uncomment to not normalize embeddings
-#     "n_epochs":200,
-#     # "unseen_frac":0., # no unseen class #will be overriden in experiment.py
-# }
-    ## FOR KRAS VARIANT NUMBER EXPERIMENT
 CONST_PARAMS = { #Parameters that are constant for all models IN EXPERIMENT.PY
     # override the default values
     # arg names should use underscores, not dashes
-    # 'no_norm_embeds':True, #uncomment to not normalize embeddings
-    "n_epochs":600,
-    "embed_dim":20,
-    "task":"batch-supervised",
+    # 'task':'classifier',
+    # 'no_norm_embeds':True, #comment to normalize embeddings
+    "n_epochs":1200,
+    # "embed_dim":20,
     "loss":"standard",
     "scheduler":"restarts",
     "cosine_t":300,
     "lr":1e-4,
-    "shape":[512, 512, 512],
     "dropout":0.15,
     "batch_size":512,
-    "weight_decay":0.5,
+    "shape":[512, 512, ],
+    'subsample':100,
+    # 'weight_decay':1e-4,
     # "unseen_frac":0., # no unseen class #will be overriden in experiment.py
 }
 
