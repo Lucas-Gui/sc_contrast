@@ -17,6 +17,7 @@ from hyperparam import PARAM_LIST, CONST_PARAMS, sample
 from main import Context, main, get_counts, make_dir_if_needed, config_dict, make_parser, split_data
 from contrastive_data import Data
 from enum import Enum
+from psutil import Process
 
 # args that are defined by user during command invocation 
 # and should be passed to workers
@@ -37,14 +38,14 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
     log = open(f'logs/{name}/{worker_id}.log', 'w')
     for args, data, ctx in iter(queue.get, None): # iterates until None is sent
         t = datetime.now()
-        print(f'Starting task {ctx.run_name} on worker {worker_id}\t(pid {getpid()}) at {t.strftime("%d/%m %H:%M")}.',
-            f'Logging to logs/{name}/{worker_id}.log')
+        print(f'Starting task {ctx.run_name} on worker {worker_id} (pid {getpid()}) at {t.strftime("%d/%m %H:%M")}.',
+            f'Logging to logs/{name}/{worker_id}.log',)
         log.write(f'Task {ctx.run_name}\n')
         log.write(t.strftime("%d/%m %H:%M")+'\n')
-        log.write(str(args))
+        log.write(str(args)+'\n')
         try :
             with redirect_stderr(log), redirect_stdout(log):
-                main(args, data, ctx,  )
+                main(args, data, ctx,  ) 
         except OutOfMemoryError as e:
             log.write(f"Out of memory error in task {ctx.run_name}.")
             print(f"Out of memory error in task {ctx.run_name} : terminating worker {worker_id}.")
@@ -76,7 +77,10 @@ def make_task(param_list, const_params, data, i:int, main_ctx:Context, split_pol
         case SplitPolicy.RANDOM:
             pass # already None
     # default args + destination name for logging
-    args = make_parser().parse_args(['N/A',  f"{main_ctx.run_name}_{i}", "--dest-name", main_ctx.run_name]) 
+    arg_list = ['N/A',  f"{main_ctx.run_name}_{i}", "--dest-name", main_ctx.run_name]
+    if main_ctx.cooper:
+        arg_list.append('--cooper')
+    args = make_parser().parse_args() 
     for key, value in param_dict.items(): # update args with hyperparameters
         setattr(args, key, value)
     with open(join(run_dir, 'config.ini'), 'w') as f:
@@ -88,7 +92,7 @@ def make_task(param_list, const_params, data, i:int, main_ctx:Context, split_pol
         main_ctx.device, 
         run_dir=run_dir,
         run_name= f"{main_ctx.run_name}_{i}",
-        verbosity = 1,
+        verbosity = main_ctx.verbosity,
         task=args.task, k_nn=args.knn,
         index_dir=join(run_dir, 'split'),
         model_file=join(run_dir, 'model.pkl'),
@@ -123,10 +127,9 @@ def main_f(args, data, main_ctx:Context, split_policy:SplitPolicy):
         w.start()
     # keep generating tasks until all are done
     for i in range(i0+args.n_workers, i0+args.n_models):
-        sleep(0.1)
-        if not queue.empty():
-            task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx, split_policy=split_policy)
-            queue.put(task) # copies everything except tensors, hopefully
+        task = make_task(PARAM_LIST, CONST_PARAMS, data, i, main_ctx, split_policy=split_policy)
+        # put task in queue, blocking until queue has space
+        queue.put(task, block=True, timeout=None) # copies everything except tensors
         # check if processes are alive
         for w in workers:
             if not w.is_alive():
@@ -146,19 +149,25 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('data_path', help='Path to data directory. ')
     parser.add_argument('name')
+    parser.add_argument('--cooper', action='store_true', help='If passed, use Cooper data')
     # data args --> get_counts
-    parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
-    parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
+    parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered', ], help='Data version to use')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
+    # preprocessing args --> get_counts --> _preprocess_counts
     parser.add_argument('--filter-cells', action='store_true', help='If passed, filter cells based on counts, number of expressed genes, and mitochondrial counts.')
+    parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
+    parser.add_argument('--log1p', action='store_true', help='If passed, log1p transform the data')
+    parser.add_argument('--cell-min', metavar='N', type=int, help='Minimum number of cells under which variants are discarded', default=10)
     # split args --> main --> split_data
     # let's define them in the experiments parameters for now and see if we need to change that
     # parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
     parser.add_argument('--restart', action='store_true', help="If passed, reload existing models. Will raise an error if models don't exist")
     group = parser.add_argument_group('Split policy. If no argument or unseen-frac is passed, split is done randomly once and shared between models')
     group = group.add_mutually_exclusive_group()
-    group.add_argument('--load-all-split-from', metavar='RUN', help='If passed, load all splits from given directory. Use to compare models on the same data.', default=None)
+    group.add_argument('--load-all-split-from', metavar='RUN', default=None, nargs='?', const='DEFAULT',
+        help='If passed, load all splits from given directory. Use to compare models on the same data. If no directory is passed, uses default run directory.',
+                       )
     group.add_argument('--load-each-split', action='store_true', help='If passed, for each model, load split from its own directory. Use with premade splits.')
     group.add_argument('--random-split', action='store_true', help='If passed, split data randomly separately for all models.')
     group.add_argument('--unseen-frac', default=0.25, type=float, help='Fraction of unseen variants. Used only if no other split-policy option is passed.')
@@ -167,6 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('-N', '--n-models', help='Total number of models to train', default=1000, type=int)
     parser.add_argument('--i0', help='Index of first model to train (useful to continue previous experiments)', default=0, type=int)
     parser.add_argument('--overwrite', help='Overwrite previous experiments', action='store_true')
+    parser.add_argument('--cpu', action='store_true', help='Use CPU. Default: use GPU if available.')
     
     args = parser.parse_args()
 
@@ -179,15 +189,18 @@ if __name__ == '__main__':
     make_dir_if_needed(parent_model_dir)
     make_dir_if_needed(join('runs', args.name))
     make_dir_if_needed(f'logs/{args.name}')
-    device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+    device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
     counts = get_counts(args)
 
     if args.shared_random_split:
-        _index_dir = join('models',args.name,'split') 
+        _index_dir = join('models', args.name, 'split') 
         split_policy = SplitPolicy.SHARED_RANDOM
     elif args.load_all_split_from:
-        _index_dir = args.load_all_split_from
+        if args.load_all_split_from == 'DEFAULT':
+            _index_dir = join('models', args.name, 'split')
+        else:
+            _index_dir = args.load_all_split_from
         split_policy = SplitPolicy.LOAD_ALL
     else:
         _index_dir = ''
@@ -198,7 +211,7 @@ if __name__ == '__main__':
 
     main_ctx = Context(
         device, parent_model_dir, run_name=args.name,
-        verbosity = 1,
+        verbosity = 2,
         index_dir=_index_dir,
     )
     data = Data.from_df(counts, device=device)
@@ -206,7 +219,7 @@ if __name__ == '__main__':
     if split_policy == SplitPolicy.SHARED_RANDOM:
         data = split_data(data, main_ctx, restart=False, load_split_path=None, unseen_frac=args.unseen_frac)
     elif split_policy == SplitPolicy.LOAD_ALL:
-        data = split_data(data, main_ctx, restart=False, load_split_path=args.load_all_split_from,)
+        data = split_data(data, main_ctx, restart=False, load_split_path=_index_dir,)
     else :
         print('Using separated data splits. Watch out for memory usage.')
     main_f(args, data, main_ctx, split_policy=split_policy)

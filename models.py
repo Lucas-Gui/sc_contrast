@@ -51,6 +51,8 @@ class ClassifierLoss(ContrastiveLoss):
     CrossEntropy wrapper
     '''
     def forward(self, ypred, y) -> Tensor:
+        # print(y.max())
+        # print(ypred.shape, y.shape, flush=True)
         return f.cross_entropy(ypred, y, reduction='mean')
     
 

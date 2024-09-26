@@ -81,43 +81,26 @@ def make_dir_if_needed(path):
     else:
         if not os.path.isdir(path):
             raise FileExistsError(path)
-        
-def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'processed'): # TODO move to data_utils
-    '''
-    Reads and returns, in that order :
-        <gene>.<subset>.matrix.mtx.gz, '''
-    if subset == 'processed':
-        _r = '.processed'
-    elif subset == 'raw':
-        _r = '.rawcounts'
-    elif subset == 'filtered':
-        _r = '.filtered'
-    else:
-        raise ValueError('subset should be "processed", "raw" or "filtered"')
-    paths = []
-    for p in [_r+'.matrix.mtx.gz',_r+'.genes.[ct]sv.gz',_r+'.cells.[ct]sv.gz', '.variants2cell.tsv.gz', 
-              '.variants.csv', '.cells.metadata.csv.gz']:
-        #cells and genes have only one column, so tsv or csv is equivalent
-        l = glob(join(data_dir, '*'+p)) #note : this means that variants2cell, variants and cells.metadata can all have any prefix
-        assert len(l)<=1, f"There should be no more than one match for {join(data_dir, '*'+p)}, {len(l)} found."
-        if len(l) == 1:
-            paths.extend(l)
-        else:
-            print(f'{join(data_dir, "*"+p)} not found, skipping...')
-            paths.append(None)
-    return paths
+
 
 def get_counts(args):
     '''Load data from args.data_path, and filter if args.filter_variants is not None.'''
-    paths = get_paths(args.data_path, subset=args.data_subset)
-    print(f'Loading data from {args.data_path}...', flush=True)
     filt = None
     if args.filter_variants is not None:
         filt = pd.read_csv(args.filter_variants, header=None).squeeze()
         filt = filt.str.upper()
         print(f'Filtering for {filt.values}')
-    counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
-                       standardize=args.data_subset != 'processed', filt_cells=args.filter_cells)
+    print(f'Loading data from {args.data_path}...', flush=True)
+    if args.cooper:
+        counts = load_Cooper_data(
+            args.data_path, group_wt_like=args.group_synon, filt_variants=filt,
+            standardize=True, filt_cells=args.filter_cells,log1p=args.log1p, n_cell_min=args.cell_min
+            )
+    else:
+        paths = get_paths(args.data_path, subset=args.data_subset)
+        counts = load_data(*paths, group_wt_like= args.group_synon, filt_variants=filt,
+                       standardize=args.data_subset != 'processed', filt_cells=args.filter_cells,
+                       log1p=args.log1p, n_cell_min=args.cell_min)
     return counts
 
 def load_split_df(index_dir, counts:pd.DataFrame, reorder_categories = True,
@@ -229,7 +212,6 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
     writer.flush()
 
 
-
 def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context,
               optimizer:torch.optim.Optimizer=None, mode:Literal['train','test']='test',
               unseen=False)-> Tensor:
@@ -320,7 +302,8 @@ def main(args, data:Data|List[Data], ctx:Context):
     '''
     If data is a Data object, will split it according to args and ctx. This creates copies and should be avoided if possible when training multiple models.
     '''
-    print(f"{ctx.run_dir=}")
+    if ctx.verbosity > 0:
+        print(f"{ctx.run_dir=}")
     # split data iff it is not already split
     if isinstance(data, Data):
         data_containers = split_data(
@@ -389,7 +372,17 @@ def main(args, data:Data|List[Data], ctx:Context):
     else :
         raise ValueError('Please specify a valid scheduler')
     # models/exp/run -> runs/exp/run
-    writer = SummaryWriter(join('runs',*(ctx.run_dir.split('/')[1:])), max_queue=10)
+    runs_dir = join('runs',*(ctx.run_dir.split('/')[1:]))
+    if os.path.exists(runs_dir):
+        if args.restart:
+            if ctx.verbosity > 0:
+                print(f'Previous run in {runs_dir} exists, not cleaning up because restart option has been passed')
+        else:
+            if ctx.verbosity > 0:
+                print(f'Cleaning up previous runs in {runs_dir}')
+            for f in os.listdir(runs_dir):
+                os.remove(join(runs_dir, f))
+    writer = SummaryWriter(runs_dir, max_queue=10)
 
     train_model(train, test_seen, test_unseen, model, run_meta,
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
@@ -411,6 +404,8 @@ def make_parser():
     parser.add_argument('data_path', help='Path to data directory. ')
     parser.add_argument('run_name',)
 
+    parser.add_argument('--cooper', action='store_true', help='Use Cooper et al. data')
+
     parser.add_argument('--dest-name', default='', help='Optionally store model and runs results in subdir')
     parser.add_argument('--verbose', default=2, help='Verbosity level. Set to 1 to silence tqdm output', type=int)
 
@@ -430,19 +425,22 @@ def make_parser():
     parser.add_argument('--positive-fraction',default=0.5, help='Fraction of positive training samples', type=float)
     parser.add_argument('--shape', type=int, nargs='+', help = 'MLP shape', default=[100, 100])
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
-    
+    parser.add_argument('--no-norm-embeds',action='store_true',
+                        help='If passed, do not rescale emebeddings to unit norm')
     parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
+    # data preprocessing args
     parser.add_argument('--filter-cells', action='store_true', help='If passed, filter cells based on counts, number of expressed genes, and mitochondrial counts.')
     parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
+    parser.add_argument('--log1p', action='store_true', help='If passed, log1p transform the data')
     parser.add_argument('--subsample', default=None, type=float,
                         help='''Subsample variants. If a float in (0,1), set the subsampling threshold to the corresponding quantile of the cell-per-variant counts.
                         If an int, set the number of cells to keep. 
                         ''')
+    parser.add_argument('--cell-min', metavar='N', type=int, help='Minimum number of cells under which variants are discarded', default=10)
     # parser.add_argument('--subsample-variants', metavar='p', type=float, help='Subsample p fraction of variants', default=None)
-    parser.add_argument('--no-norm-embeds',action='store_true',
-                        help='If passed, do not rescale emebeddings to unit norm')
+
     # scheduler lr args
     sched_args = parser.add_argument_group('Learning rate scheduler arguments')
     sched_args.add_argument('--lr',type=float, default=1e-3, )
@@ -493,8 +491,15 @@ def args_check(args, sources):
             print('Warning : projection shape is ignored for classifier task')
         if args.alpha : 
             raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
+    if args.cooper:
+        if args.subset != 'raw':
+            print('Warning: Cooper data is only available in raw form. Ignoring subset argument')
+        if args.group_synon:
+            raise NotImplementedError('Grouping synonymous variants is not implemented for Cooper data')
     if args.subsample is not None and args.bag_size > 0:
         raise NotImplementedError('Subsampling is not implemented for MIL models')
+        
+        
       
 if __name__ == '__main__':
     parser = make_parser()
