@@ -372,10 +372,12 @@ def main(args, data:Data|List[Data], ctx:Context):
     train, test_seen, test_unseen = make_loaders(
         *data_containers, batch_size=args.batch_size, n_workers=args.n_workers, 
          dataset_class=config.dataset_class, dataset_kwargs={'bag_size':args.bag_size},
-        device=ctx.device)
+         subsampling_t=args.subsample, 
+         verbosity=ctx.verbosity,device=ctx.device)
     in_shape = next(iter(train))[0][0].shape[1]
     print(model)
     loss_fn = config.loss_dict[args.loss](margin=args.margin, alpha=args.alpha)
+    print(type(loss_fn), flush=True)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     if args.scheduler == 'plateau':
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -434,6 +436,10 @@ def make_parser():
                         help='If passed, group all synonymous variants in the same class')
     parser.add_argument('--filter-cells', action='store_true', help='If passed, filter cells based on counts, number of expressed genes, and mitochondrial counts.')
     parser.add_argument('--filter-variants', metavar='FILE', help='Path to file with variants to include. If not passed, all variants are included', default = None)
+    parser.add_argument('--subsample', default=None, type=float,
+                        help='''Subsample variants. If a float in (0,1), set the subsampling threshold to the corresponding quantile of the cell-per-variant counts.
+                        If an int, set the number of cells to keep. 
+                        ''')
     # parser.add_argument('--subsample-variants', metavar='p', type=float, help='Subsample p fraction of variants', default=None)
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If passed, do not rescale emebeddings to unit norm')
@@ -487,6 +493,8 @@ def args_check(args, sources):
             print('Warning : projection shape is ignored for classifier task')
         if args.alpha : 
             raise NotImplementedError('Nonzero embedding norm penalty parameter alpha is not compatible with a classification task.')
+    if args.subsample is not None and args.bag_size > 0:
+        raise NotImplementedError('Subsampling is not implemented for MIL models')
       
 if __name__ == '__main__':
     parser = make_parser()

@@ -1,6 +1,6 @@
 from torch import Tensor
 import torch
-from torch.utils.data import Dataset, DataLoader, IterableDataset
+from torch.utils.data import Dataset, DataLoader, IterableDataset, SubsetRandomSampler
 import pandas as pd
 import numpy as np
 from typing import *
@@ -19,7 +19,7 @@ class Data():
     variants : pd.Series
 
     def __init__(self, x,y,cycle, cats,cycle_cats, variants ) -> None:
-        self.x =x
+        self.x = x
         self.y = y
         self.cycle = cycle
         self._cats = cats
@@ -27,7 +27,7 @@ class Data():
         self._variants = variants
     # safety against changing categories after y has been computed
     @property
-    def cats(self):
+    def cats(self)->pd.Categorical:
         return self._cats
     @cats.setter
     def cats(self, value):
@@ -36,7 +36,7 @@ class Data():
         self._cats = value
 
     @property
-    def variants(self):
+    def variants(self)->pd.Series:
         return self._variants
     @variants.setter
     def variants(self, value):
@@ -99,6 +99,7 @@ class Data():
         self.y = torch.tensor(
             self.variants.cat.codes.to_numpy(), dtype=int, device=device
         )
+        return self
 
     # def subsample_variants(self, n) -> Self:
     #     '''
@@ -306,24 +307,82 @@ class CycleClassifierDataset(_DfDataset):
     def __getitem__(self, index) -> Any:
         return (self.x[index],), (self.y[index], self.cycle[index]) 
 
-def make_loaders(*dfs:Data, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
+def make_loaders(*data:Data, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
+                 subsampling_t = None,
                  dataset_kwargs={},
-                 n_workers = 8, device='cpu') -> Tuple[DataLoader]:
+                 n_workers = 8, device='cpu', verbosity=2) -> Tuple[DataLoader]:
     '''
     pos_frac : fraction of positive pairs in training set (first dataloader.).
     Other dataloaders will have a 50% fraction of positive pairs.
-    dataset_class : class for train dataset. Test datasets will always be SiameseDataset  
+    dataset_class : class for train dataset. Test datasets will always be SiameseDataset 
+    subsampling_t: subsampling parameter for SubsamplingSampler for the training set. 
+        If an integer, will be the maximum number of examples per variant.
+        If a float, will be the quantile of the distribution of variant sizes to use as threshold.
     '''
     dls = []
-    for i, df in enumerate(dfs):
-        if df is None:
+    for i, d in enumerate(data):
+        if d is None:
             dls.append(None)
             continue
-        ds = dataset_class(df, p=pos_frac  if i ==0 else 0.5, **dataset_kwargs) # use half/half +/- pairs for eval (only for relevant dataloaders)
-        dls.append(DataLoader(ds, batch_size=batch_size, shuffle=True if not issubclass(dataset_class, InstanceBagDataset) else None,
+        ds = dataset_class(d, p=pos_frac  if i ==0 else 0.5, **dataset_kwargs) # use half/half +/- pairs for eval (only for relevant dataloaders)
+        if i == 0 and subsampling_t is not None:
+            shuffle = False
+            if isinstance(subsampling_t, int):
+                sampler = SubsamplingSampler(d, max_size=subsampling_t)
+            elif isinstance(subsampling_t, float):
+                sampler = SubsamplingSampler(d, quantile=subsampling_t)   
+            else:
+                raise ValueError('subsampling_t should be an int or a float')
+            if verbosity > 0:
+                print('Subsampling training set to ',sampler.threshold, ' cells per variant')
+        else:
+            sampler = None
+            if issubclass(dataset_class, InstanceBagDataset):
+                shuffle = False 
+                assert subsampling_t is None, 'Subsampling not implemented for InstanceBagDataset'
+            else:
+                shuffle = True    
+        dls.append(DataLoader(ds, batch_size=batch_size, 
+                              shuffle=shuffle, sampler=sampler,
                                num_workers=n_workers))
     return dls
 
 
+class SubsamplingSampler(SubsetRandomSampler):
+    r'''
+    A sampler that subsamples variants that are too numerous in the dataset. 
+    Variants above a given threshold are subsampled to that threshold.
+    Args:
+        data (Data): the data to sample from, that will be contained in the DataLoader.
+        max_size (int): number of examples to use as threshold.
+        quantile (float): the quantile of the distribution of variant sizes to use as threshold.
+            Mutually exclusive with max_size.
+    '''
+    indices : pd.Index
+    def __init__(self, data:Data, max_size:int=None, quantile:float=None, generator=None ) -> None:
+        if max_size is not None and quantile is not None:
+            raise ValueError('max_size and quantile are mutually exclusive')
+        self.variants = pd.DataFrame(data.variants)
+        self.variants['i'] = np.arange(data.variants.shape[0])
+        if quantile is not None:
+            assert 0 < quantile < 1, 'quantile should be between 0 and 1'
+            # unused categories add unwanted zeros
+            self.threshold = int(self.variants['variant'].cat.remove_unused_categories().value_counts().quantile(quantile))
+        else:
+            self.threshold = max_size
+        self.subsample() # initialize indices. Usually not needed except for length. 
+        self.generator = generator
 
+    def subsample(self) -> None:
+        '''
+        Compute the indices to sample from the dataset and store them in self.indeices.
+        '''
+        larger = self.variants.groupby('variant', observed=True).filter(lambda x: len(x) > self.threshold) #observed to ignore empty categories
+        larger = larger.groupby('variant', observed=True).sample(n=self.threshold, replace=False)
+        smaller = self.variants.groupby('variant', observed=True).filter(lambda x: len(x) <= self.threshold)
+        self.indices = pd.concat([larger.i, smaller.i], axis=0).values
+
+    def __iter__(self):
+        self.subsample()
+        return super().__iter__()
 
