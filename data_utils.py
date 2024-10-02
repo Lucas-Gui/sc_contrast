@@ -1,7 +1,7 @@
 import gzip
 import pandas as pd
 import numpy as np
-from contrastive_data import Data
+from contrastive_data import Data, SlicedData
 from os.path import join
 from glob import glob
 from enum import Enum
@@ -125,6 +125,11 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path=None,
     #pivot 
     counts['gene_name'] = genes.loc[counts.gene].reset_index(drop=True)
     counts['cell_name'] = cells.loc[counts.cell].reset_index(drop=True)
+    dup = counts[['gene_name','cell_name']].duplicated(keep='first')
+    if dup.any():
+        print(f'Removing {dup.sum()} duplicate entries')
+        print(counts[dup])
+        counts = counts[~dup]
     # counts = counts.drop(columns=['cell','gene']) #unnecessary : included in pivot
     counts = counts.pivot(index='cell_name',columns='gene_name',values='reads')
     counts = counts.fillna(0) # pivot will create NA where the .mtx file was sparse
@@ -162,6 +167,8 @@ def _preprocess_counts(
         filt = (counts['variant'].str[0] == counts['variant'].str[-1])  | (counts.variant == 'WT') | (counts.variant == ('GFP_eGFP'))
         print(f"\t\tCasting {counts[filt].variant.nunique()} variants to 'control' ")
         counts.loc[filt, 'variant']= 'control'
+    else:
+        counts.loc[counts.variant.str.lower() == 'wt', 'variant'] = 'control'
     if log1p:
         print('\t\tLog1p transforming data')
         counts.iloc[:,:-3] = np.log1p(counts.iloc[:,:-3])
@@ -232,12 +239,13 @@ def split_dataframes(data:pd.DataFrame, x_cell = 0.25, x_var = 0.25): #TODO : gr
  
     return train, test_seen, test_unseen
 
-def split(data:Data, x_cell=0.25, x_var=0.25):
+def split(data:Data, x_cell=0.25, x_var=0.25, save_dir=None):
     '''
     First remove a x_var fraction of variants a unseen-class test set, 
     and then a x_cell fraction as a seen-class test set.
     Keep 'control' variant in training set.
-    Return three Data objects for train, test seen and test unseen
+    Return three SlicedData objects for train, test seen and test unseen
+    If save_dir is not None, save the variants and cell splits in save_dir as .csv files
     '''
     print(f"Splitting data with x_cell = {x_cell} and x_var = {x_var}")
     variants = data.variants[data.variants != 'control'].unique()
@@ -245,7 +253,7 @@ def split(data:Data, x_cell=0.25, x_var=0.25):
     variants = np.random.permutation(variants)
     if 'control' in data.variants.cat.categories:
         variants = np.concatenate((np.array(['control']), variants))
-    data.variants = data.variants.cat.reorder_categories(variants)
+    # data.variants = data.variants.cat.reorder_categories(variants) # NO : Data is shared. Categories reordering takes place in SlicedData
     if x_var == 0:
         test_vars = []
         unseen = None #make an empty Data instead ?
@@ -253,17 +261,17 @@ def split(data:Data, x_cell=0.25, x_var=0.25):
     else:
         test_vars = variants[-int(len(variants)*x_var):]
         filt_unseen = data.variants.isin(test_vars)
-        unseen = data.subset(filt_unseen)
+        unseen = SlicedData(data, filt_unseen, cats=variants)
     # randomly select x_cell fraction of cells for seen test set
     filt_seen = pd.Series(
         np.random.rand(len(data.variants)) < x_cell, 
         index=data.variants.index
         )
     # remove cells in seen and train from unseen
-    filt_train = ~filt_seen & ~filt_unseen
-    filt_seen = filt_seen & ~filt_unseen
-    seen = data.subset(filt_seen)
-    train = data.subset(filt_train)
+    filt_train= ~filt_seen & ~filt_unseen
+    filt_seen =  filt_seen & ~filt_unseen
+    seen = SlicedData(data, filt_seen, cats=variants)
+    train= SlicedData(data, filt_train, cats=variants)
     print(f"Train variants: {train.variants.nunique()}")
     print(f"Train length: {len(train)}")
     print(f"Seen test length  : {len(seen)}")
@@ -272,5 +280,68 @@ def split(data:Data, x_cell=0.25, x_var=0.25):
         print(f"Unseen test length: {len(unseen)}")
     else :
         print("No unseen test set") 
-    assert set(train.variants.unique()) == set(seen.variants.unique()), "Train and seen test sets have different variants, likely due to variants with too few cells."
+    assert set(train.variants.unique()) >= set(seen.variants.unique()), "Seen dataset contains variants not in train dataset, likely due to variants with too few cells."
+    if save_dir is not None:
+        var_df = pd.DataFrame({'variant':variants})
+        var_df['fold'] = (~var_df.variant.isin(test_vars)).astype(int)
+        var_df.to_csv(join(save_dir, 'variants.csv'), index=False)
+        filt_train.to_csv(join(save_dir, 'cells_train.csv'), index=True)
     return train, seen, unseen
+
+def var_k_fold_split(data:Data, k:int, x_cell=0.25, save_dir=None) -> List[List[SlicedData]]:
+    '''
+    Split data into k folds variant-wise. 
+    All folds contain the "control" variant in the train set, while the other folds are split normally.
+    Each fold contains a test set of x_cell proportion of cells, which are never in the train set.
+    args:
+        data : Data object
+        k : number of folds
+        x_cell : proportion of cells in test set. Pass 0 have no seen test set.
+        save_dir : if not None, save the folds in save_dir as .csv files (one for variants, one for cells)
+    '''
+    variants = data.variants[data.variants != 'control'].unique().astype(str) # cast back to string to reset category order
+    variants = np.random.permutation(variants)
+    splits = pd.DataFrame({'variant':variants, 'fold':np.arange(len(variants))%k+1}) #0 is for control
+    splits = pd.concat((pd.DataFrame({'variant':['control'], 'fold':[0]}), splits), axis=0, ignore_index=True)
+    train_filt = np.random.rand(len(data.variants)) > x_cell # unique cell mask for all folds, such that a test cell is never in train
+    train_filt = pd.Series(train_filt, index=data.variants.index)
+    
+
+    folds = var_folds(data, splits, train_filt)
+
+    if save_dir is not None:
+        splits.to_csv(join(save_dir, 'variants.csv'), index=False)
+        train_filt.to_csv(join(save_dir, 'cells_train.csv'), index=True)
+    return folds
+
+def var_folds(data:Data, splits:pd.DataFrame, train_filt:pd.Series) -> List[List[SlicedData]]:
+    '''
+    Split data into folds variant wise accordinf to given folds.
+    Variant order is preserved from splits, with train variants first and unseen variants last.
+    If no cells are not either in train or in unseen, seen is set to None.
+    To not split in folds, set splits.fold to 0 for the train variants and 1 for the unseen variants.
+    '''
+    folds = []
+    for i in range(1,max(splits.fold)+1):
+        train_variants = splits[splits.fold!=i].variant
+        seen_filt = data.variants.isin(train_variants)
+        var_cats = pd.concat((train_variants, splits[splits.fold==i].variant), axis=0)
+        unseen= SlicedData(data, ~seen_filt, cats=var_cats)
+        train = SlicedData(data, seen_filt & train_filt, cats=var_cats)
+        if (train_filt | ~seen_filt).all(): # no cells are not either in train or in unseen
+            seen = None
+        else:
+            seen  = SlicedData(data, seen_filt & ~train_filt, cats=var_cats) 
+            assert set(train.variants.unique()) >= set(seen.variants.unique()), "Seen dataset contains variants not in train dataset, likely due to variants with too few cells."
+        folds.append([train, seen, unseen])
+    return folds
+
+
+def load_split(index_dir, data:Data, 
+            #    reorder_categories = True,
+               ) -> List[List[SlicedData]]:
+
+    train_filt = pd.read_csv(join(index_dir, 'cells_train.csv'), index_col=0) # cell-indexed boolean mask
+    splits = pd.read_csv(join(index_dir, 'variants.csv'))
+    folds = var_folds(data, splits, train_filt)
+    return folds

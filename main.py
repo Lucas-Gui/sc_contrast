@@ -61,6 +61,11 @@ bag_dataset_dict = {
 # Context : to put all arguments to main that will be passed down to core_loop and train_model,
 #   in order to limit the size of function calls/definitions
 
+class DataSource(Enum):
+    BHUIYAN = 1
+    URSU = 2
+    COOPER = 3
+
 @dataclass 
 class Context(): # defaults to None to allow for partial definition 
     device:str = 'cpu'
@@ -72,6 +77,7 @@ class Context(): # defaults to None to allow for partial definition
     index_dir :str = None
     model_file:str = None
     meta_file :str = None
+    data_source: DataSource = None
 
 # ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
 
@@ -128,31 +134,6 @@ def load_split_df(index_dir, counts:pd.DataFrame, reorder_categories = True,
 
     return dataframes
 
-def load_split(index_dir, data:Data, reorder_categories = True,
-               ) -> List[Data]:
-    '''
-    If reorder_categories, use saved category order and drop unused categories. This is important for classifier models,
-    as category order defines the label.
-    Set it to false if the categories are not the same as during training ("control" split into individual variants, for example)
-    '''
-    i = 0
-    containers = []          
-    if reorder_categories:
-        cat = pd.read_csv(join(index_dir, 'categories.csv'), index_col=0).to_numpy().flat
-        data = data.subset(data.variants.isin(cat)) # drop unused variants
-        data.variants = data.variants.cat.remove_unused_categories().cat.reorder_categories(cat)
-    else:
-        warn('Not reordering categories will lead to wrong classifier prediction')
-    parent_idx = data.variants.index
-    while os.path.isfile(join(index_dir, f'index_{i}.csv')):
-        idx = pd.read_csv(join(index_dir, f'index_{i}.csv'), index_col=1).index
-        containers.append(data.subset(parent_idx.isin(idx)))
-        i+=1
-    print(', '.join([str(len(data)) for data in containers]) + ' exemples in data')
-    print(f"{containers[0].variants.nunique()} variants in train")
-    print(f"{containers[2].variants.nunique()} variants in unseen")
-
-    return containers
 
 def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_tag:str, i):
     for tag, metric_or_dict in metrics.items():
@@ -267,14 +248,17 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
         })
     return metrics
 
-def split_data(data:Data, ctx:Context, restart, load_split_path=None, unseen_frac=0.25, cell_frac=0.25, verbosity=3 ):
+def split_data(data:Data, ctx:Context, restart, 
+               load_split_path=None, unseen_frac=None, cell_frac=0.25, k_var=None ,
+               verbosity=3 ) -> List[List[SlicedData]]:
     '''
-    Split the data into train, test_seen and test_unseen.
+    Split the data into folds of train, test_seen and test_unseen.
     If restart, load split from index dir.
     If load_split_path is not None, load split from that directory
     Otherwise, create a new split (or raise an exception if that split exists). 
     In all cases, save the indices to ctx.index_dir
     '''
+    assert (k_var is None) ^ (unseen_frac is None), 'Exactly one of k_var or unseen_frac must be passed'
     if restart : #load model and split
         containers = load_split(ctx.index_dir, data)     
     else:
@@ -287,34 +271,29 @@ def split_data(data:Data, ctx:Context, restart, load_split_path=None, unseen_fra
                 raise FileExistsError(f'Index directory {ctx.index_dir} already exists.')
             if verbosity > 1:
                 print('Creating new data split')
-            containers = split(data, x_var=unseen_frac, x_cell=cell_frac) #random split
-        make_dir_if_needed(ctx.index_dir)
-        pd.DataFrame(containers[0].variants.cat.categories).to_csv(join(ctx.index_dir, 'categories.csv')) #save category order
-    for i, d in enumerate(containers):
-        if d is not None:
-            df = pd.DataFrame(index=d.variants.index).reset_index()
-        else:
-            df = pd.DataFrame(columns=['index'])
-        df.to_csv(join(ctx.index_dir,f'index_{i}.csv'))
+            make_dir_if_needed(ctx.index_dir)
+            if k_var is not None:
+                containers = var_k_fold_split(data, k=k_var, x_cell=cell_frac, save_dir=ctx.index_dir) 
+            else:
+                containers = [split(data, x_cell=cell_frac, x_var=unseen_frac, save_dir=ctx.index_dir)]
     return containers
 
-def main(args, data:Data|List[Data], ctx:Context):
+def main(args, data:Data|List[SlicedData], ctx:Context):
     '''
     If data is a Data object, will split it according to args and ctx. This creates copies and should be avoided if possible when training multiple models.
+    Otherwise, data is assumed to be split as a list of SlicedData objects.
     '''
     if ctx.verbosity > 0:
         print(f"{ctx.run_dir=}")
     # split data iff it is not already split
     if isinstance(data, Data):
-        data_containers = split_data(
+        folds = split_data(
             data, ctx, args.restart, args.load_split, args.unseen_frac)
+        data_containers = folds[args.fold] if args.fold is not None else folds[0]
     else:
         if ctx.verbosity > 1:
             print('Data is already split')
         data_containers = data
-    for data in data_containers:
-        if data is not None:
-            data.compute_y() # freeze y once variants are set
     # get loss/model/dataset classes for task
     config = config_dict[args.task]
     if args.bag_size >= 1:
@@ -330,7 +309,7 @@ def main(args, data:Data|List[Data], ctx:Context):
     else:
         # make new model
         n_class = data_containers[0].variants.nunique()
-        in_shape = data_containers[0].x.shape[1]
+        in_shape = data_containers[0][0].x.shape[0]
         print(f'{n_class} classes, {in_shape} features\n', flush=True)
         inner_network = MLP(input_shape=in_shape, inner_shape=args.shape, dropout=args.dropout,
                     output_shape=args.embed_dim, normalize= not args.no_norm_embeds,)
@@ -400,7 +379,7 @@ def test(args): #TODO : Fix. in particular, make a fake data directory with all 
 
 
 def make_parser():
-    parser = ArgumentParser('''Train and evaluate a contrastive model on Ursu et al. data''')
+    parser = ArgumentParser(description='''Train and evaluate a contrastive model on Ursu et al. data''')
     parser.add_argument('data_path', help='Path to data directory. ')
     parser.add_argument('run_name',)
 
@@ -413,7 +392,8 @@ def make_parser():
     parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given path. Use to compare models on the same data', default=None)
     parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
     parser.add_argument('--unseen-frac', default=0.25, type=float, help='Fraction of unseen variants')
-    
+    parser.add_argument('--fold', default=None, type=int, help='If loading a k-fold split, specify the fold to use')
+
     parser.add_argument('--loss', choices=[*loss_dict.keys()], default='standard',
                         help='''standard loss : $y ||e_1 - e_2||^2_2 + (1-y) max(||e_1 - e_2||_2 -m, 0)^2 $''')
     parser.add_argument('-m','--margin',default=1, type=float, help='Contrastive loss margin parameter')
@@ -498,6 +478,7 @@ def args_check(args, sources):
             raise NotImplementedError('Grouping synonymous variants is not implemented for Cooper data')
     if args.subsample is not None and args.bag_size > 0:
         raise NotImplementedError('Subsampling is not implemented for MIL models')
+    assert args.fold is None or args.fold > 0, "Fold 0 is reserved for control variants"
         
         
       

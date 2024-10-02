@@ -1,3 +1,11 @@
+'''
+Classes to organize the data for contrastive and supervised learning.
+Data is stored in a BaseData object, which should live in the main process.
+BaseData can be either Data or SlicedData, the latter being a view of a subset of the data.
+Then, BaseData are passed to Dataset objects, which are used to create DataLoader objects.
+'''
+
+from dataclasses import dataclass
 from torch import Tensor
 import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset, SubsetRandomSampler
@@ -5,44 +13,36 @@ import pandas as pd
 import numpy as np
 from typing import *
 
+@dataclass
+class DataSample:
+    '''Contains a sample of data, to be returned by SlicedData.__getitem__'''
+    x: Tensor
+    y: Tensor
+    cycle: Tensor|None
+    variant: str # as returned by accessing Data.variants
+
 class Data():
     '''
     A class that contains the data and metadata for a dataloader.
     Lives in the main process, will be passed to the queue to be made into the appropriate DataLoader
     by the worker processes. 
+    Allows to share x without copying.
     '''
-    cats : pd.Categorical
-    cycle_cats : pd.Categorical
+    # cats : pd.Categorical
+    # cycle_cats : pd.Categorical
     x : Tensor
-    y : Tensor
     cycle : Tensor
     variants : pd.Series
 
-    def __init__(self, x,y,cycle, cats,cycle_cats, variants ) -> None:
+    def __init__(self, x, cycle, variants ) -> None:
         self.x = x
-        self.y = y
         self.cycle = cycle
-        self._cats = cats
-        self.cycle_cats = cycle_cats
+        # self.cycle_cats = cycle_cats
         self._variants = variants
-    # safety against changing categories after y has been computed
-    @property
-    def cats(self)->pd.Categorical:
-        return self._cats
-    @cats.setter
-    def cats(self, value):
-        if self.y is not None:
-            raise ValueError('Cannot change categories if y is not None')
-        self._cats = value
 
-    @property
-    def variants(self)->pd.Series:
+    @property # protect against modification
+    def variants(self) -> pd.Series:
         return self._variants
-    @variants.setter
-    def variants(self, value):
-        if self.y is not None:
-            raise ValueError('Cannot change categories if y is not None')
-        self._variants = value
     
     def __len__(self):
         return len(self._variants)
@@ -54,75 +54,78 @@ class Data():
         Convert variant and cycle to labels and store categories.
         Yield ((n examples), (n labels) pairs)
         '''
-        cats = df.variant.cat.categories.copy() # seen variants are first
-        cycle_cats = df['cycle'].cat.categories.copy()
+        # cats = df.variant.cat.categories.copy() # seen variants are first
+        # cycle_cats = df['cycle'].cat.categories.copy()
         cycle = torch.tensor(
             df['cycle'].cat.codes.to_numpy(), dtype=int, device=device
         )
         x = torch.tensor(
                 df.drop(columns=['variant','Variant functional class', 'cycle']).to_numpy(), 
             dtype=torch.float32, device=device)
-        y = None
         # for instance bag datasets # TODO : make sure this is not an issue, otherwise move in child class
         variants = df.variant.copy() # to be able to group by
-        data = cls(x,y,cycle, cats,cycle_cats, variants)
+        data = cls(x, cycle, variants)
         return data
-    
-    def subset(self, index, drop_cats = False) -> Self:
+
+
+
+class SlicedData(Dataset):
+    '''
+    Map to a subset of a Data to allow models to train over different subsets of the data without copying.
+    categorical variables are reordered to match the new subset.
+    attributes:
+        data : Data
+        index : pd.DataFrame indexed by cell ids, sorted in the order of data slice, 
+            such that index.j.iloc is a mapping from the new index to the original index.
+            Contains columns 'j', 'i', and 'variant'. j should not be used outside of this class. 
+            i can be used to query
+    '''
+    def __init__(self, data:Data, index:pd.Series|None, cats = None) -> None:
         '''
-        Create a new Data instance referring to a subset of the data.
-        index should be a boolean mask (either an array or a series indexed by cell ids).
-        If drop_cats, unused categories will be dropped from the categories.
+        args:
+            data : Data
+            index: boolean mask indexed by cell ids.
+            cats : categories to use for the new data. If None, will use the categories of the original data.
         '''
-        data = Data(
-            self.x[index],
-            self.y[index] if self.y is not None else None,
-            self.cycle[index],
-            self.cats,
-            self.cycle_cats,
-            self.variants.loc[index]
-        )
-        if drop_cats:
-            if self.y is None:
-                data.variants = data.variants.cat.remove_unused_categories()
-                data.cats = data.variants.cat.categories
-            else:
-                raise ValueError('Cannot drop categories if y is not None')
-        return data
-    
-    def compute_y(self):
-        '''
-        Compute y tensor from the variant categories.
-        Separated from constructor to allow category reordering and subsampling.
-        '''
-        device = self.x.device
+        df = pd.DataFrame(data.variants)
+        if index is None:
+            index = pd.Series(True, index = df.index)
+        df['j'] = np.arange(len(df)) # original order
+        df = df[index]
+        df['i'] = np.arange(len(df)) # useful for querying data with a specific variant
+        if cats is not None:
+            df['variant'] = df['variant'].cat.reorder_categories(cats, )
+
+        self.index = df
+        # self.index is in the same order as input index
+        self.data = data    
         self.y = torch.tensor(
-            self.variants.cat.codes.to_numpy(), dtype=int, device=device
+            df['variant'].cat.codes.to_numpy(), dtype=int, device=data.x.device
         )
-        return self
+    
+    @property
+    def variants(self)-> pd.Series:
+        return self.index['variant']
 
-    # def subsample_variants(self, n) -> Self:
-    #     '''
-    #     Filter Data tensors in-place to keep only n variants.
-    #     '''
-    #     variants = self.variants.cat.categories
-    #     variants = np.random.choice(variants,replace=False, size = n )
-    #     filt = self.variants.isin(variants)
-    #     self.x = self.x[filt]
-    #     self.y = self.y[filt]
-    #     self.cycle = self.cycle[filt]
+    def __len__(self):
+        return len(self.index)
 
+    def __getitem__(self, i) -> DataSample:
+        j = self.index.j.iloc[i]
+        return DataSample(
+            self.data.x[j],
+            self.y[i], # y is not in Data
+            self.data.cycle[j],
+            self.data.variants.iloc[j], # = self.index['variant'].iloc[i]
+        )
+    
 
 class _DfDataset(Dataset):
-    def __init__(self, data:Data, **kwargs) -> None:
-        self.x = data.x
-        self.y = data.y
-        self.cycle = data.cycle
-        self.cats = data.cats
-        self.cycle_cats = data.cycle_cats
+    def __init__(self, data:SlicedData, **kwargs) -> None:
+        self.data = data
         
     def __len__(self):
-        return len(self.y)
+        return len(self.data)
     
     def __getitem__(self, index) -> Tuple[Tuple[Tensor, ...], Tuple[Tensor, ...]]: # return a pair (*x, *y) of tensor n-uplets, with the same n
         raise NotImplementedError
@@ -134,6 +137,7 @@ class InstanceBagDataset(IterableDataset, _DfDataset):
     Yields (h,k) X tensors with h instances of the same class.
     '''
     def __init__(self, data:Data, bag_size=5, p=0.5, **kwargs) -> None:
+        raise NotImplementedError('Need to be adapted to new SlicedData')
         _DfDataset.__init__(self, data) #this is ugly design but I don't want to rely on Pytorch being cooperative
         # cell ids is a dataframe with the same index as variants, which is a Series
         self.cell_ids = pd.DataFrame(np.arange(len(data)), index = data.variants.index.copy(), columns=['ids']) # numerical index w.r.t. X
@@ -216,7 +220,8 @@ class BatchDataset(_DfDataset):
     """
     Load data for batch contrastive loss (Khosla et al, )
     Because we don't do data augmentation, instead we randomly sample pairs of cells from the same classes.
-    Yields (x1, x2) , (y,) tensors, where x1 and x2 have the same label y
+    Yields (x1, x2) , (y,) tensors, where x1 and x2 have the same label y.
+    Requires that all classes have at least two examples.
     """
 
     def __init__(self, data:Data, p=0.5, **kwargs) -> None:
@@ -225,12 +230,16 @@ class BatchDataset(_DfDataset):
         '''
         super().__init__(data)
     
-    def __getitem__(self, index) -> Any:
-        x1 = self.x[index]
-        y = self.y[index]
-        y_subset = self.y[self.y == y]
-        i = torch.randint(0, y_subset.size(0), (1,)).item()
-        x2 = self.x[i]
+    def __getitem__(self, i1) -> Any:
+        sample = self.data[i1]
+        x1 = sample.x
+        y = sample.y
+        v = sample.variant
+        idx = self.data.index
+        y_subset = idx[(idx.variant == v)&(idx.i !=i1)].i
+        i2 = torch.randint(0, len(y_subset), (1,)).item() # using random from torch 
+        i2 = y_subset.iloc[i2]
+        x2 = self.data[i2].x
         return (x1,x2), (y,) 
     
 class SiameseDataset(_DfDataset):
@@ -242,17 +251,20 @@ class SiameseDataset(_DfDataset):
         super().__init__(data)
         self.p = p
     
-    def __getitem__(self, index) -> Any:
-        x1 = self.x[index]
-        y1 = self.y[index]
+    def __getitem__(self, i1) -> Any:
+        sample = self.data[i1]
+        x1 = sample.x
+        y1 = sample.y
+        v = sample.variant
         if torch.rand((1,)).item() < self.p: # randomly get same class or different class
             # same class case : positive pair
-            y_subset = self.y[self.y == y1]
+            y_subset = self.data.index[ self.data.index.variant == v].i
         else:
-            y_subset = self.y[self.y != y1]
-        i = torch.randint(0, y_subset.size(0), (1,)).item()
-        x2 = self.x[i]
-        y2 = self.y[i]
+            y_subset = self.data.index[(self.data.index.variant != v)&(self.data.index.i != i1)].i
+        i2 = torch.randint(0, len(y_subset), (1,)).item()
+        i2 = y_subset.iloc[i2]
+        x2 = self.data[i2].x
+        y2 = self.data[i2].y
         return (x1,x2), (y1, y2) #,i
     
 class ClassifierDataset(_DfDataset):
@@ -263,7 +275,8 @@ class ClassifierDataset(_DfDataset):
         super().__init__(data)
 
     def __getitem__(self, index) -> Any:
-        return (self.x[index],), (self.y[index],) 
+        sample = self.data[index]
+        return (sample.x,), (sample.y,)
     
 
 class BipartiteDataset(Dataset): #TODO : conform to superclass return scheme for compatibility
@@ -307,7 +320,7 @@ class CycleClassifierDataset(_DfDataset):
     def __getitem__(self, index) -> Any:
         return (self.x[index],), (self.y[index], self.cycle[index]) 
 
-def make_loaders(*data:Data, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
+def make_loaders(*data:SlicedData, batch_size=64, dataset_class = SiameseDataset,  pos_frac=0.5,
                  subsampling_t = None,
                  dataset_kwargs={},
                  n_workers = 8, device='cpu', verbosity=2) -> Tuple[DataLoader]:
@@ -324,6 +337,8 @@ def make_loaders(*data:Data, batch_size=64, dataset_class = SiameseDataset,  pos
         if d is None:
             dls.append(None)
             continue
+        print(d.variants.unique())
+    
         ds = dataset_class(d, p=pos_frac  if i ==0 else 0.5, **dataset_kwargs) # use half/half +/- pairs for eval (only for relevant dataloaders)
         if i == 0 and subsampling_t is not None:
             shuffle = False
@@ -359,11 +374,10 @@ class SubsamplingSampler(SubsetRandomSampler):
             Mutually exclusive with max_size.
     '''
     indices : pd.Index
-    def __init__(self, data:Data, max_size:int=None, quantile:float=None, generator=None ) -> None:
+    def __init__(self, data:SlicedData, max_size:int=None, quantile:float=None, generator=None ) -> None:
         if max_size is not None and quantile is not None:
             raise ValueError('max_size and quantile are mutually exclusive')
-        self.variants = pd.DataFrame(data.variants)
-        self.variants['i'] = np.arange(data.variants.shape[0])
+        self.variants = data.index[['variant','i']].copy()
         if quantile is not None:
             assert 0 < quantile < 1, 'quantile should be between 0 and 1'
             # unused categories add unwanted zeros
@@ -375,7 +389,7 @@ class SubsamplingSampler(SubsetRandomSampler):
 
     def subsample(self) -> None:
         '''
-        Compute the indices to sample from the dataset and store them in self.indeices.
+        Compute the indices to sample from the dataset and store them in self.indices.
         '''
         larger = self.variants.groupby('variant', observed=True).filter(lambda x: len(x) > self.threshold) #observed to ignore empty categories
         larger = larger.groupby('variant', observed=True).sample(n=self.threshold, replace=False)
