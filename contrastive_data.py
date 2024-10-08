@@ -337,7 +337,6 @@ def make_loaders(*data:SlicedData, batch_size=64, dataset_class = SiameseDataset
         if d is None:
             dls.append(None)
             continue
-        print(d.variants.unique())
     
         ds = dataset_class(d, p=pos_frac  if i ==0 else 0.5, **dataset_kwargs) # use half/half +/- pairs for eval (only for relevant dataloaders)
         if i == 0 and subsampling_t is not None:

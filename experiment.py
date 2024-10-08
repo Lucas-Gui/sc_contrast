@@ -59,18 +59,23 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
         log.write("\n")
     log.close()
 
-def make_task(param_list, const_params, data, i, main_ctx:Context, split_policy, )->Task:
+
+
+def make_task(param_dict, data, i, main_ctx:Context, split_policy, )->Task:
     '''
     Create the args namespace and the context and return a task for workers.
     Create the necessary directory and files.
     Handles the splitting policy by modifying the load_split argument.
+    args:
+        param_dict (dict): hyperparameters to pass to the model, as returned by hyperparam.sample
+        data (Data): the data to use for the model
+        i (str or int): the id of the model
     '''
     # print(f"{split_policy=}")
     run_dir = join(main_ctx.run_dir, f"{main_ctx.run_name}_{i}")
     # creating model dire and saving config
     make_dir_if_needed(run_dir)
     # sampling run arguments and populating args Namespace
-    param_dict = sample(param_list, const_params ) # sample hyperparameters
     match split_policy:
         case SplitPolicy.SHARED_RANDOM | SplitPolicy.LOAD_ALL | SplitPolicy.K_FOLD:
             param_dict['load_split'] = main_ctx.index_dir
@@ -101,12 +106,13 @@ def make_task(param_list, const_params, data, i, main_ctx:Context, split_policy,
 def make_n_tasks(param_list, const_params, data:List[List[SlicedData]|Data], i, main_ctx, split_policy)-> List[Task]:
     '''
     Make n tasks, according to split policy.
-    If split policy is not K_FOLD, make only one task. Otherwise, make k tasks.
+    If split policy is not K_FOLD, make only one task. Otherwise, make k tasks with the same sampled hyperparameters.
     '''
+    param_dict = sample(param_list, const_params ) # sample hyperparameters 
     if split_policy == SplitPolicy.K_FOLD:
-        return [make_task(param_list, const_params, data[k], f"{i}_f{k+1}", main_ctx, split_policy) for k in range(args.k_fold)]
+        return [make_task(param_dict, data[k], f"{i}_f{k+1}", main_ctx, split_policy) for k in range(args.k_fold)]
     else:
-        return [make_task(param_list, const_params, data[0], i, main_ctx, split_policy)]
+        return [make_task(param_dict, data[0], i, main_ctx, split_policy)]
 
 def main_f(args, data, main_ctx:Context, split_policy:SplitPolicy):
     '''Create workers and distribute tasks'''

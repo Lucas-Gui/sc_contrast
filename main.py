@@ -190,7 +190,6 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             run_meta['i'] = i
             with open(ctx.meta_file, 'w') as file:
                 json.dump(run_meta, file, sort_keys=True, indent=2)
-    writer.flush()
 
 
 def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context,
