@@ -83,7 +83,7 @@ def make_task(param_dict, data, i, main_ctx:Context, split_policy, )->Task:
             param_dict['load_split'] = f"models/{main_ctx.run_name}/{main_ctx.run_name}_{i}/split"
         case SplitPolicy.RANDOM:
             pass # already None
-    args = make_parser().parse_args('N/A N/A') 
+    args = make_parser().parse_args('N/A N/A'.split()) # create empty args
     for key, value in param_dict.items(): # update args with hyperparameters
         setattr(args, key, value)
     with open(join(run_dir, 'config.ini'), 'w') as f:
@@ -178,10 +178,13 @@ if __name__ == '__main__':
     group = parser.add_argument_group('Split policy. If no argument is passed, uses k-fold cross-validation.')
     group = group.add_mutually_exclusive_group()
     group.add_argument('--k-fold',metavar='k', default=5, type=int, help='Default. Use K_FOLD split policy with k splits. For each set of hyperparameters, train k models on k splits.')
-    group.add_argument('--load-all-split-from', metavar='RUN', default=None, nargs='?', const='DEFAULT',
-        help='If passed, load all splits from given directory. Use to compare models on the same data. If no directory is passed, uses default run directory.',
+    group.add_argument('--load-all', metavar='RUN', default=None, nargs='?', const='DEFAULT',
+        help='''
+        If passed, load all splits from given directory. Use to compare models on the same data. If no directory is passed, uses default run directory.
+        May use k-fold or single splits depending on directory.
+        ''',
                        )
-    group.add_argument('--load-each-split', action='store_true', help='If passed, for each model, load split from its own directory. Use with premade splits.')
+    group.add_argument('--load-each', action='store_true', help='If passed, for each model, load split from its own directory. Use with premade splits.')
     group.add_argument('--random-split', action='store_true', help='If passed, split data randomly separately for all models.')
     group.add_argument('--unseen-frac', type=float, help='Fraction of unseen variants. If passed, use the SHARED_RANDOM split policy and generate a new data split to use for all models.', default=None)
     # experiment control args
@@ -204,24 +207,23 @@ if __name__ == '__main__':
     make_dir_if_needed(f'logs/{args.name}')
     device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu' 
     print(f'Using {device}.')
-    counts = get_counts(args)
     # determine split policy and corresponding index directory
     if args.unseen_frac is not None:
         _index_dir = join('models', args.name, 'split') 
         split_policy = SplitPolicy.SHARED_RANDOM
-    elif args.load_all_split_from is not None:
-        if args.load_all_split_from == 'DEFAULT':
+    elif args.load_all is not None:
+        if args.load_all == 'DEFAULT':
             _index_dir = join('models', args.name, 'split')
         else:
-            _index_dir = args.load_all_split_from
+            _index_dir = args.load_all
         split_policy = SplitPolicy.LOAD_ALL
-    if args.load_each_split:
+    elif args.load_each:
         _index_dir = ''
         split_policy = SplitPolicy.LOAD_EACH
     elif args.random_split:
         _index_dir = ''
         split_policy = SplitPolicy.RANDOM
-    else: # default case
+    else: # default case. args.k_fold is always defined (equal to 5 if nothing is passed)
         _index_dir = join('models', args.name, 'split') 
         split_policy = SplitPolicy.K_FOLD
     
@@ -231,8 +233,9 @@ if __name__ == '__main__':
         index_dir=_index_dir,
         data_source=DataSource.COOPER if args.cooper else None
     )
+
+    counts = get_counts(args)
     data = Data.from_df(counts, device=device)
-    # split data if using a shared split
     if split_policy == SplitPolicy.SHARED_RANDOM:
         data = split_data(data, main_ctx, restart=False, load_split_path=None, unseen_frac=args.unseen_frac)
     elif split_policy == SplitPolicy.LOAD_ALL:

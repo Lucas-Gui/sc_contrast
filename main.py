@@ -1,6 +1,3 @@
-import warnings
-# warnings.simplefilter(action='ignore', category=FutureWarning) #silence pandas warning about is_sparse
-
 from data_utils import *
 from models import *
 from contrastive_data import *
@@ -14,7 +11,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 import os
 from os.path import join
-from glob import glob
 import pandas as pd
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
@@ -24,8 +20,7 @@ from warnings import warn
 from dataclasses import dataclass
 from contextlib import nullcontext
 from copy import deepcopy
-
-import pprint
+from datetime import datetime
 # config : task -> loss, model, dataset
 
 SAVE_FREQUENCY = 100
@@ -80,6 +75,49 @@ class Context(): # defaults to None to allow for partial definition
     data_source: DataSource = None
 
 # ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
+
+class EarlyStoppingIterator():
+    '''
+    If loss does not improve for n iterations, stop training.
+    Smooth loss by rolling average.
+    '''
+    def __init__(self, dt, roll, max_iter=np.inf, i0 =0):
+        self.max_iter = max_iter
+        self.iter = i0
+        self.dt = dt
+        self.roll = roll
+        self.losses = np.ones(dt+roll)
+
+    def __iter__(self):
+        return self
+    
+    def update(self, loss):
+        self.losses[:-1] = self.losses[1:]
+        self.losses[-1] = loss
+
+    def __next__(self):
+        if self.iter >= self.max_iter:
+            raise StopIteration
+        if self.iter >= self.dt+self.roll:
+            current = np.mean(self.losses[-self.roll:])
+            ref = np.mean(self.losses[:self.roll])
+            if current >= ref:
+                raise StopIteration
+        self.iter += 1
+        return self.iter
+    
+class RangeIterator():
+    '''
+    Wrapper around range for compatibility with EarlyStoppingIterator
+    '''
+    def __init__(self, *args):
+        self.args = args
+    
+    def __iter__(self):
+        return range(*self.args).__iter__()
+    
+    def update(self, loss):
+        pass
 
 def make_dir_if_needed(path):
     if not os.path.exists(path):
@@ -146,13 +184,18 @@ def write_metrics(metrics:  Dict[str, float|dict], writer:SummaryWriter, main_ta
 
 def train_model(train, test_seen, test_unseen, model, run_meta, 
                 loss_fn, optimizer, scheduler:optim.lr_scheduler.LRScheduler, writer:SummaryWriter,
-                ctx:Context, n_epoch=10_000, 
+                ctx:Context, n_epoch=600, early_stop=None,
                  ):
+    assert early_stop is None or n_epoch is None, 'Only one of n_epoch and early_stop can be passed'
     i_0 = run_meta['i']
-    stop_score = f'{ctx.k_nn}_nn_ref' # TODO : CHANGE TO SELF OR SET IN ARGS/CONTEXT
+    stop_score = f'{ctx.k_nn}_nn_ref' # TODO :  SET IN ARGS/CONTEXT
     print(optimizer)
     print('Early stopping metric : ', stop_score)
-    bar = tqdm(range(i_0, i_0+n_epoch), position=0, disable= ctx.verbosity <=2)
+    if early_stop is not None:
+        iterator = EarlyStoppingIterator(early_stop, 20, i0=i_0) # TODO : expose rolling window size in args
+    else:
+        iterator = RangeIterator(i_0, i_0+n_epoch)
+    bar = tqdm(iterator, position=0, disable= ctx.verbosity <=2)
     best_score = - np.inf
     best_i = last_save_model = i_0
     for i in bar:
@@ -165,6 +208,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             model, train, 
             test_seen, k=ctx.k_nn, device=ctx.device)
         write_metrics(metrics_seen, writer, 'test_seen',i)
+        iterator.update(- metrics_seen[stop_score])
         if metrics_seen[stop_score] > best_score:
             best_model = deepcopy(model)
             best_score = metrics_seen[stop_score]
@@ -257,7 +301,8 @@ def split_data(data:Data, ctx:Context, restart,
     Otherwise, create a new split (or raise an exception if that split exists). 
     In all cases, save the indices to ctx.index_dir
     '''
-    assert (k_var is None) ^ (unseen_frac is None), 'Exactly one of k_var or unseen_frac must be passed'
+    print('Splitting data...', )
+    t = datetime.now()
     if restart : #load model and split
         containers = load_split(ctx.index_dir, data)     
     else:
@@ -266,6 +311,7 @@ def split_data(data:Data, ctx:Context, restart,
                 print(f'Copying split from {load_split_path}')
             containers = load_split(load_split_path, data)
         else:
+            assert (k_var is None) ^ (unseen_frac is None), 'If not loading existing split, exactly one of k_var or unseen_frac must be passed'
             if os.path.exists(ctx.index_dir):
                 raise FileExistsError(f'Index directory {ctx.index_dir} already exists.')
             if verbosity > 1:
@@ -275,6 +321,7 @@ def split_data(data:Data, ctx:Context, restart,
                 containers = var_k_fold_split(data, k=k_var, x_cell=cell_frac, save_dir=ctx.index_dir) 
             else:
                 containers = [split(data, x_cell=cell_frac, x_var=unseen_frac, save_dir=ctx.index_dir)]
+    print(f'Split done in {(datetime.now()-t).total_seconds():.1f} s')
     return containers
 
 def main(args, data:Data|List[SlicedData], ctx:Context):
@@ -364,7 +411,7 @@ def main(args, data:Data|List[SlicedData], ctx:Context):
 
     train_model(train, test_seen, test_unseen, model, run_meta,
                 loss_fn, optimizer=optimizer, scheduler=scheduler, writer=writer,
-                n_epoch=args.n_epochs, ctx=ctx
+                n_epoch=args.n_epochs, early_stop=args.early_stop, ctx=ctx
                 )
     
 def test(args): #TODO : Fix. in particular, make a fake data directory with all the necessary files to use load_data
@@ -387,6 +434,10 @@ def make_parser():
     parser.add_argument('--dest-name', default='', help='Optionally store model and runs results in subdir')
     parser.add_argument('--verbose', default=2, help='Verbosity level. Set to 1 to silence tqdm output', type=int)
 
+    epochs_args = parser.add_mutually_exclusive_group(required=False) # one of the two should be passed, but the options to pass neither is left to allow for empty args creation
+    epochs_args.add_argument('-n','--n-epochs', metavar='N', default=None, type=int, help='Number of epochs to run',) 
+    epochs_args.add_argument('--early-stop', metavar='N', type=int, help='Stop after N epochs without improvement', default=None)
+
     parser.add_argument('--restart', action='store_true')
     parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given path. Use to compare models on the same data', default=None)
     parser.add_argument('--data-subset', default='processed', choices=['processed','raw','filtered'], help='Data version to use')
@@ -406,7 +457,6 @@ def make_parser():
     parser.add_argument('--embed-dim', type=int, default=20 ,help='Embedding dimension') # Ursu et al first project in 50 dim, but only use the 20 first ones for sc-eVIP
     parser.add_argument('--no-norm-embeds',action='store_true',
                         help='If passed, do not rescale emebeddings to unit norm')
-    parser.add_argument('-n','--n-epochs', metavar='N', default=600, type=int, help='Number of epochs to run')
     parser.add_argument('--group-synon',action='store_true', 
                         help='If passed, group all synonymous variants in the same class')
     # data preprocessing args

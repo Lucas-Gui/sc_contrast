@@ -321,6 +321,7 @@ def var_folds(data:Data, splits:pd.DataFrame, train_filt:pd.Series) -> List[List
     If no cells are not either in train or in unseen, seen is set to None.
     To not split in folds, set splits.fold to 0 for the train variants and 1 for the unseen variants.
     '''
+    assert isinstance(train_filt, pd.Series), "train_filt should be a pd.Series" # if it is a dataframe, `seen_filt & train_filt` will have size NxN and overflow memory
     folds = []
     for i in range(1,max(splits.fold)+1):
         train_variants = splits[splits.fold!=i].variant
@@ -341,7 +342,7 @@ def load_split(index_dir, data:Data,
             #    reorder_categories = True,
                ) -> List[List[SlicedData]]:
 
-    train_filt = pd.read_csv(join(index_dir, 'cells_train.csv'), index_col=0) # cell-indexed boolean mask
+    train_filt = pd.read_csv(join(index_dir, 'cells_train.csv'), index_col=0).squeeze() # cell-indexed boolean mask
     splits = pd.read_csv(join(index_dir, 'variants.csv'))
     folds = var_folds(data, splits, train_filt)
     return folds
