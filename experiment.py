@@ -9,7 +9,6 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from os.path import join
 from os import getpid
-from time import sleep
 from typing import *
 from configparser import ConfigParser
 

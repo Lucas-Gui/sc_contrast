@@ -188,7 +188,7 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
                  ):
     assert early_stop is None or n_epoch is None, 'Only one of n_epoch and early_stop can be passed'
     i_0 = run_meta['i']
-    stop_score = f'{ctx.k_nn}_nn_ref' # TODO :  SET IN ARGS/CONTEXT
+    stop_score = f'nloss' # TODO :  SET IN ARGS/CONTEXT. Also change sign in update if loss/score
     print(optimizer)
     print('Early stopping metric : ', stop_score)
     if early_stop is not None:
@@ -278,6 +278,7 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
     }
     if not unseen  or ctx.task not in ['classifier', 'cycle-classifier']: 
         metrics['loss'] = np.mean( [t.detach().cpu().item() for t in loss_l])
+        metrics['nloss'] = - metrics['loss']
     if mode == 'train':
         metrics['lr'] = optimizer.param_groups[0]['lr']
     if ctx.task in ['siamese']:
