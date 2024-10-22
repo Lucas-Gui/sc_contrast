@@ -119,6 +119,12 @@ class SlicedData(Dataset):
             self.data.variants.iloc[j], # = self.index['variant'].iloc[i]
         )
     
+    def get_x(self):
+        '''Return a copy of the data X, in the order of the slice'''
+        return self.data.x.iloc[self.index.j]
+    
+
+    
 
 class _DfDataset(Dataset):
     def __init__(self, data:SlicedData, **kwargs) -> None:

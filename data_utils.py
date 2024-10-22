@@ -324,9 +324,9 @@ def var_folds(data:Data, splits:pd.DataFrame, train_filt:pd.Series) -> List[List
     assert isinstance(train_filt, pd.Series), "train_filt should be a pd.Series" # if it is a dataframe, `seen_filt & train_filt` will have size NxN and overflow memory
     folds = []
     for i in range(1,max(splits.fold)+1):
-        train_variants = splits[splits.fold!=i].variant
+        train_variants = splits[splits.fold!=i]['variant']
         seen_filt = data.variants.isin(train_variants)
-        var_cats = pd.concat((train_variants, splits[splits.fold==i].variant), axis=0)
+        var_cats = pd.concat((train_variants, splits[splits.fold==i]['variant']), axis=0)
         unseen= SlicedData(data, ~seen_filt, cats=var_cats)
         train = SlicedData(data, seen_filt & train_filt, cats=var_cats)
         if (train_filt | ~seen_filt).all(): # no cells are not either in train or in unseen
