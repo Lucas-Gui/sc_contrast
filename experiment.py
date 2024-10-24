@@ -18,6 +18,7 @@ from contrastive_data import Data, SlicedData
 from enum import Enum
 from psutil import Process
 
+TIME_FMT = "%d/%m %H:%M"
 # args that are defined by user during command invocation 
 # and should be passed to workers
 OVERRIDE_ARGS = [ 'overwrite', 'restart'] # 'load_split','unseen_frac',
@@ -39,10 +40,10 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
     log = open(f'logs/{name}/{worker_id}.log', 'w')
     for args, data, ctx in iter(queue.get, None): # iterates until None is sent
         t = datetime.now()
-        print(f'Starting task {ctx.run_name} on worker {worker_id} (pid {getpid()}) at {t.strftime("%d/%m %H:%M")}.',
+        print(f'Starting task {ctx.run_name} on worker {worker_id} (pid {getpid()}) at {t.strftime(TIME_FMT)}.',
             f'Logging to logs/{name}/{worker_id}.log',)
         log.write(f'Task {ctx.run_name}\n')
-        log.write(t.strftime("%d/%m %H:%M")+'\n')
+        log.write(t.strftime(TIME_FMT)+'\n')
         log.write(str(args)+'\n')
         try :
             with redirect_stderr(log), redirect_stdout(log):
@@ -56,6 +57,7 @@ def worker_f(name, worker_id, queue : "mp.Queue[Task]"):
         #     raise RuntimeError(f"""Error in task {ctx.run_name} on worker {worker_id}. 
         #             See logs/{name}/{worker_id}.log for details.""")
         log.write("\n")
+    print(f'Worker {worker_id} finished at {datetime.now().strftime(TIME_FMT)}.')
     log.close()
 
 
@@ -172,7 +174,9 @@ if __name__ == '__main__':
     # split args --> main --> split_data
     # let's define them in the experiments parameters for now and see if we need to change that
     # parser.add_argument('--load-split',metavar='RUN', help='If passed, load split fron given run. Use to compare models on the same data')
-    parser.add_argument('--restart', action='store_true', help="If passed, reload existing models. Will raise an error if models don't exist")
+    parser.add_argument('--restart', action='store_true', 
+                        help="""If passed, reload existing models. Raise an error if models don't exist.
+                        Should we passed with either --load-all or --load-each, depending on the previous split policy.""")
 
     group = parser.add_argument_group('Split policy. If no argument is passed, uses k-fold cross-validation.')
     group = group.add_mutually_exclusive_group()

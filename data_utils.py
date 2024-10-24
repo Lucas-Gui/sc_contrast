@@ -4,12 +4,22 @@ import numpy as np
 from contrastive_data import Data, SlicedData
 from os.path import join
 from glob import glob
-from enum import Enum
 from typing import *
-
+from utils import Context
+from datetime import datetime
 from psutil import Process
+import os
 
 EPS_STD = 1e-3
+
+
+def make_dir_if_needed(path):
+    if not os.path.exists(path):
+        os.mkdir(path)
+    else:
+        if not os.path.isdir(path):
+            raise FileExistsError(path)
+
         
 def get_paths(data_dir:str, subset : Literal['processed','raw', 'filtered'] = 'processed'): # TODO move to data_utils
     '''
@@ -150,16 +160,49 @@ def load_data(mtx_path, gene_path, cell_path, v2c_path, variant_path=None,
     
     counts = _preprocess_counts(counts, **kwargs) 
     return counts
+    
+def split_data(data:Data, ctx:Context, restart, 
+               load_split_path=None, unseen_frac=None, cell_frac=0.25, k_var=None ,
+               verbosity=3 ) -> List[List[SlicedData]]:
+    '''
+    Split the data into folds of train, test_seen and test_unseen.
+    If restart, load split from index dir.
+    If load_split_path is not None, load split from that directory
+    Otherwise, create a new split (or raise an exception if that split exists). 
+    In all cases, save the indices to ctx.index_dir
+    '''
+    print('Splitting data...', )
+    t = datetime.now()
+    if restart : #load model and split
+        containers = load_split(ctx.index_dir, data)     
+    else:
+        if load_split_path is not None:
+            if verbosity > 1:
+                print(f'Copying split from {load_split_path}')
+            containers = load_split(load_split_path, data)
+        else:
+            assert (k_var is None) ^ (unseen_frac is None), 'If not loading existing split, exactly one of k_var or unseen_frac must be passed'
+            if os.path.exists(ctx.index_dir):
+                raise FileExistsError(f'Index directory {ctx.index_dir} already exists.')
+            if verbosity > 1:
+                print('Creating new data split')
+            make_dir_if_needed(ctx.index_dir)
+            if k_var is not None:
+                containers = var_k_fold_split(data, k=k_var, x_cell=cell_frac, save_dir=ctx.index_dir) 
+            else:
+                containers = [split(data, x_cell=cell_frac, x_var=unseen_frac, save_dir=ctx.index_dir)]
+    print(f'Split done in {(datetime.now()-t).total_seconds():.1f} s')
+    return containers
 
 def _preprocess_counts(
-        counts,
+        counts:pd.DataFrame,
         group_wt_like=False, filt_variants:List[str] = None, log1p=False,
         standardize=False, filt_cells=False, filter_kwargs={}, n_cell_min=10,
         ):
     if filt_cells:
         print('\t\tFiltering cells and removing variants subsequently absent.')
         print(f'\t\t{Process().memory_info().rss/1024**3:.2f} GB used')
-        counts[:,:-3] = filter_nabid_data(counts[:,:-3], **filter_kwargs)
+        counts.iloc[:,:-3] = filter_nabid_data(counts.iloc[:,:-3], **filter_kwargs)
     if filt_variants is not None:
         counts = counts[counts.variant.isin(filt_variants)]
     if group_wt_like:
@@ -256,7 +299,7 @@ def split(data:Data, x_cell=0.25, x_var=0.25, save_dir=None):
     # data.variants = data.variants.cat.reorder_categories(variants) # NO : Data is shared. Categories reordering takes place in SlicedData
     if x_var == 0:
         test_vars = []
-        unseen = None #make an empty Data instead ?
+        unseen = None #make an empty Data instead ? When changing, also change correponding checks
         filt_unseen = pd.Series(False, index=data.variants.index)
     else:
         test_vars = variants[-int(len(variants)*x_var):]
@@ -283,7 +326,7 @@ def split(data:Data, x_cell=0.25, x_var=0.25, save_dir=None):
     assert set(train.variants.unique()) >= set(seen.variants.unique()), "Seen dataset contains variants not in train dataset, likely due to variants with too few cells."
     if save_dir is not None:
         var_df = pd.DataFrame({'variant':variants})
-        var_df['fold'] = (~var_df.variant.isin(test_vars)).astype(int)
+        var_df['fold'] = (var_df.variant.isin(test_vars)).astype(int) # 0 for train, 1 for unseen
         var_df.to_csv(join(save_dir, 'variants.csv'), index=False)
         filt_train.to_csv(join(save_dir, 'cells_train.csv'), index=True)
     return train, seen, unseen
@@ -306,7 +349,6 @@ def var_k_fold_split(data:Data, k:int, x_cell=0.25, save_dir=None) -> List[List[
     train_filt = np.random.rand(len(data.variants)) > x_cell # unique cell mask for all folds, such that a test cell is never in train
     train_filt = pd.Series(train_filt, index=data.variants.index)
     
-
     folds = var_folds(data, splits, train_filt)
 
     if save_dir is not None:
@@ -323,11 +365,14 @@ def var_folds(data:Data, splits:pd.DataFrame, train_filt:pd.Series) -> List[List
     '''
     assert isinstance(train_filt, pd.Series), "train_filt should be a pd.Series" # if it is a dataframe, `seen_filt & train_filt` will have size NxN and overflow memory
     folds = []
-    for i in range(1,max(splits.fold)+1):
+    n_folds = max(splits['fold'].max(), 1) # if all folds are 0, there is no unseen test set
+    for i in range(1,n_folds+1):
         train_variants = splits[splits.fold!=i]['variant']
         seen_filt = data.variants.isin(train_variants)
         var_cats = pd.concat((train_variants, splits[splits.fold==i]['variant']), axis=0)
         unseen= SlicedData(data, ~seen_filt, cats=var_cats)
+        if len(unseen) == 0:
+            unseen = None # empty data sets should be signaled with None
         train = SlicedData(data, seen_filt & train_filt, cats=var_cats)
         if (train_filt | ~seen_filt).all(): # no cells are not either in train or in unseen
             seen = None

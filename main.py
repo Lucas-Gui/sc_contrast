@@ -2,6 +2,7 @@ from data_utils import *
 from models import *
 from contrastive_data import *
 from scoring import *
+from utils import *
 
 from configargparse import ArgumentParser
 import torch 
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from contextlib import nullcontext
 from copy import deepcopy
 from datetime import datetime
+from enum import Enum
 # config : task -> loss, model, dataset
 
 SAVE_FREQUENCY = 100
@@ -56,24 +58,6 @@ bag_dataset_dict = {
 # Context : to put all arguments to main that will be passed down to core_loop and train_model,
 #   in order to limit the size of function calls/definitions
 
-class DataSource(Enum):
-    BHUIYAN = 1
-    URSU = 2
-    COOPER = 3
-
-@dataclass 
-class Context(): # defaults to None to allow for partial definition 
-    device:str = 'cpu'
-    run_dir:str = None
-    run_name:str = None
-    task:str = None
-    k_nn:int = 5
-    verbosity:int = 3
-    index_dir :str = None
-    model_file:str = None
-    meta_file :str = None
-    data_source: DataSource = None
-
 # ctx = Context() # in a jupyter notebook, assign the correct values to this instance #TODO : can we remove ?
 
 class EarlyStoppingIterator():
@@ -83,10 +67,11 @@ class EarlyStoppingIterator():
     '''
     def __init__(self, dt, roll, max_iter=np.inf, i0 =0):
         self.max_iter = max_iter
+        self.i0 = i0 # to keep track of iterations since restart
         self.iter = i0
         self.dt = dt
         self.roll = roll
-        self.losses = np.ones(dt+roll)
+        self.losses = np.ones(dt+roll)*np.inf
 
     def __iter__(self):
         return self
@@ -98,10 +83,12 @@ class EarlyStoppingIterator():
     def __next__(self):
         if self.iter >= self.max_iter:
             raise StopIteration
-        if self.iter >= self.dt+self.roll:
+        if self.iter-self.i0 >= self.dt+self.roll:
             current = np.mean(self.losses[-self.roll:])
             ref = np.mean(self.losses[:self.roll])
             if current >= ref:
+                print(self.losses)
+                print(self.losses.min(), self.losses.max())
                 raise StopIteration
         self.iter += 1
         return self.iter
@@ -118,13 +105,6 @@ class RangeIterator():
     
     def update(self, loss):
         pass
-
-def make_dir_if_needed(path):
-    if not os.path.exists(path):
-        os.mkdir(path)
-    else:
-        if not os.path.isdir(path):
-            raise FileExistsError(path)
 
 
 def get_counts(args):
@@ -192,8 +172,10 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
     print(optimizer)
     print('Early stopping metric : ', stop_score)
     if early_stop is not None:
+        print(f'Early stopping after {early_stop} epochs without improvement')
         iterator = EarlyStoppingIterator(early_stop, 20, i0=i_0) # TODO : expose rolling window size in args
     else:
+        print(f"Training for {n_epoch} epochs")
         iterator = RangeIterator(i_0, i_0+n_epoch)
     bar = tqdm(iterator, position=0, disable= ctx.verbosity <=2)
     best_score = - np.inf
@@ -234,6 +216,15 @@ def train_model(train, test_seen, test_unseen, model, run_meta,
             run_meta['i'] = i
             with open(ctx.meta_file, 'w') as file:
                 json.dump(run_meta, file, sort_keys=True, indent=2)
+    torch.save(model, ctx.model_file)
+    print('', flush=True)
+    run_meta['i'] = i
+    if early_stop is not None and iterator.iter < iterator.max_iter:
+        run_meta['termination'] = 'early_stop'
+    else:
+        run_meta['termination'] = 'n_epochs'
+    with open(ctx.meta_file, 'w') as file:
+        json.dump(run_meta, file, sort_keys=True, indent=2)
 
 
 def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context,
@@ -292,38 +283,7 @@ def core_loop(data:DataLoader, model:Model, loss_fn:ContrastiveLoss, ctx:Context
         })
     return metrics
 
-def split_data(data:Data, ctx:Context, restart, 
-               load_split_path=None, unseen_frac=None, cell_frac=0.25, k_var=None ,
-               verbosity=3 ) -> List[List[SlicedData]]:
-    '''
-    Split the data into folds of train, test_seen and test_unseen.
-    If restart, load split from index dir.
-    If load_split_path is not None, load split from that directory
-    Otherwise, create a new split (or raise an exception if that split exists). 
-    In all cases, save the indices to ctx.index_dir
-    '''
-    print('Splitting data...', )
-    t = datetime.now()
-    if restart : #load model and split
-        containers = load_split(ctx.index_dir, data)     
-    else:
-        if load_split_path is not None:
-            if verbosity > 1:
-                print(f'Copying split from {load_split_path}')
-            containers = load_split(load_split_path, data)
-        else:
-            assert (k_var is None) ^ (unseen_frac is None), 'If not loading existing split, exactly one of k_var or unseen_frac must be passed'
-            if os.path.exists(ctx.index_dir):
-                raise FileExistsError(f'Index directory {ctx.index_dir} already exists.')
-            if verbosity > 1:
-                print('Creating new data split')
-            make_dir_if_needed(ctx.index_dir)
-            if k_var is not None:
-                containers = var_k_fold_split(data, k=k_var, x_cell=cell_frac, save_dir=ctx.index_dir) 
-            else:
-                containers = [split(data, x_cell=cell_frac, x_var=unseen_frac, save_dir=ctx.index_dir)]
-    print(f'Split done in {(datetime.now()-t).total_seconds():.1f} s')
-    return containers
+
 
 def main(args, data:Data|List[SlicedData], ctx:Context):
     '''
@@ -353,8 +313,7 @@ def main(args, data:Data|List[SlicedData], ctx:Context):
         model = torch.load(ctx.model_file)
         with open(ctx.meta_file, 'r') as file:
             run_meta = json.load(file) # data that we want to keep between restarts
-    else:
-        # make new model
+    else: # create new model
         n_class = data_containers[0].variants.nunique()
         in_shape = data_containers[0][0].x.shape[0]
         print(f'{n_class} classes, {in_shape} features\n', flush=True)
@@ -376,8 +335,10 @@ def main(args, data:Data|List[SlicedData], ctx:Context):
                             ).to(ctx.device)
         run_meta = {
             'i':0,
+            'fold_i':args.fold,
+            'n_variants':data_containers[0].variants.nunique(),
+            'termination':None, # indicates why the model stopped training (early stopping, end of epochs, or None)
         }
-    run_meta['n_variants'] = data_containers[0].variants.nunique()
     train, test_seen, test_unseen = make_loaders(
         *data_containers, batch_size=args.batch_size, n_workers=args.n_workers, 
          dataset_class=config.dataset_class, dataset_kwargs={'bag_size':args.bag_size},

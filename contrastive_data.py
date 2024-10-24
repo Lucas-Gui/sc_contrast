@@ -121,7 +121,7 @@ class SlicedData(Dataset):
     
     def get_x(self):
         '''Return a copy of the data X, in the order of the slice'''
-        return self.data.x.iloc[self.index.j]
+        return self.data.x[self.index.j]
     
 
     
